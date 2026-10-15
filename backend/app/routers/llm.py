@@ -2,18 +2,23 @@ import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from ..auth import current_user
+from ..auth import current_user, UserInfo
 from ..config import settings
 
-router = APIRouter(prefix="/llm", tags=["llm"])
+router = APIRouter(prefix="/llm", tags=["LLM"])
 
 
 class ChatIn(BaseModel):
     prompt: str
 
 
-@router.post("/chat")
-async def chat(body: ChatIn, user: dict = Depends(current_user)):
+@router.post("/chat", summary="Chat dengan LLM")
+async def chat(body: ChatIn, user: UserInfo = Depends(current_user)):
+    """
+    Kirim prompt ke LLM dan dapatkan response.
+    
+    Memerlukan autentikasi JWT token.
+    """
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             f"{settings.ollama_url}/api/chat",
@@ -24,4 +29,7 @@ async def chat(body: ChatIn, user: dict = Depends(current_user)):
             },
         )
         r.raise_for_status()
-    return {"user": user.get("preferred_username"), "answer": r.json()["message"]["content"]}
+    return {
+        "user": user.username,
+        "answer": r.json()["message"]["content"]
+    }

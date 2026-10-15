@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     keycloak_internal_url: str = "http://keycloak:8080"  # untuk ambil JWKS (antar-container)
     keycloak_public_url: str = "http://localhost:8080"   # nilai `iss` di token
     keycloak_realm: str = "dev"
+    keycloak_client_id: str = "fastapi-app"
 
 
 settings = Settings()

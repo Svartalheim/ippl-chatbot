@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPPL Chatbot - Browser Client Example</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .section.active {
+            display: block;
+        }
+        
+        .section h2 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e4e8;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.2s;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .user-info {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .user-info p {
+            margin: 5px 0;
+            color: #555;
+        }
+        
+        .user-info strong {
+            color: #333;
+        }
+        
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        
+        .chat-message.user {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        
+        .chat-message.bot {
+            background: #f5f5f5;
+        }
+        
+        .chat-message strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #667eea;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .token-expires {
+            font-size: 12px;
+            color: #666;
+            margin-top: 10px;
+        }
+        
+        #chat-messages {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 IPPL Chatbot</h1>
+            <p>Browser Client Example - Keycloak JWT Authentication</p>
+        </div>
+        
+        <div class="content">
+            <!-- Login Section -->
+            <div id="login-section" class="section active">
+                <h2>Login</h2>
+                <div id="login-alert"></div>
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" value="dev" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" value="dev" placeholder="Enter password">
+                </div>
+                <button id="login-btn">Login</button>
+            </div>
+            
+            <!-- Dashboard Section -->
+            <div id="dashboard-section" class="section">
+                <h2>Dashboard</h2>
+                <div class="user-info" id="user-info"></div>
+                <div class="token-expires" id="token-expires"></div>
+                <button id="logout-btn" style="margin-top: 10px;">Logout</button>
+            </div>
+            
+            <!-- Chat Section -->
+            <div id="chat-section" class="section">
+                <h2>Chat with LLM</h2>
+                <div id="chat-messages"></div>
+                <div class="form-group">
+                    <textarea id="chat-prompt" placeholder="Type your message here..."></textarea>
+                </div>
+                <button id="send-btn">Send Message</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'http://localhost:8000';
+        
+        // State
+        let accessToken = null;
+        let refreshToken = null;
+        let expiresAt = null;
+        let userInfo = null;
+        let tokenRefreshInterval = null;
+        
+        // DOM Elements
+        const loginSection = document.getElementById('login-section');
+        const dashboardSection = document.getElementById('dashboard-section');
+        const chatSection = document.getElementById('chat-section');
+        const loginAlert = document.getElementById('login-alert');
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const sendBtn = document.getElementById('send-btn');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const chatPromptInput = document.getElementById('chat-prompt');
+        const chatMessages = document.getElementById('chat-messages');
+        const userInfoDiv = document.getElementById('user-info');
+        const tokenExpiresDiv = document.getElementById('token-expires');
+        
+        // Utility functions
+        function showAlert(element, message, type = 'info') {
+            element.innerHTML = `<div class="alert ${type}">${message}</div>`;
+            setTimeout(() => element.innerHTML = '', 5000);
+        }
+        
+        function showSection(section) {
+            [loginSection, dashboardSection, chatSection].forEach(s => s.classList.remove('active'));
+            section.classList.add('active');
+        }
+        
+        function updateTokenExpiresDisplay() {
+            if (!expiresAt) return;
+            
+            const now = new Date();
+            const diff = expiresAt - now;
+            const minutes = Math.floor(diff / 60000);
+            const seconds = Math.floor((diff % 60000) / 1000);
+            
+            if (diff <= 0) {
+                tokenExpiresDiv.innerHTML = '<span class="status offline">Token Expired</span>';
+            } else {
+                tokenExpiresDiv.innerHTML = `Token expires in: ${minutes}m ${seconds}s`;
+            }
+        }
+        
+        // API functions
+        async function login(username, password) {
+            const response = await fetch(`${API_BASE_URL}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail);
+            }
+            
+            return response.json();
+        }
+        
+        async function getUserInfo() {
+            const response = await fetch(`${API_BASE_URL}/me`, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail);
+            }
+            
+            return response.json();
+        }
+        
+        async function sendChatMessage(prompt) {
+            const response = await fetch(`${API_BASE_URL}/llm/chat`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ prompt })
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail);
+            }
+            
+            return response.json();
+        }
+        
+        async function refreshAccessToken() {
+            const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Token refresh failed');
+            }
+            
+            return response.json();
+        }
+        
+        async function logout() {
+            if (refreshToken) {
+                await fetch(`${API_BASE_URL}/auth/logout`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+            }
+            
+            accessToken = null;
+            refreshToken = null;
+            expiresAt = null;
+            userInfo = null;
+            
+            if (tokenRefreshInterval) {
+                clearInterval(tokenRefreshInterval);
+                tokenRefreshInterval = null;
+            }
+            
+            showSection(loginSection);
+            showAlert(loginAlert, 'Logged out successfully', 'success');
+        }
+        
+        // Event handlers
+        loginBtn.addEventListener('click', async () => {
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value.trim();
+            
+            if (!username || !password) {
+                showAlert(loginAlert, 'Please enter username and password', 'error');
+                return;
+            }
+            
+            loginBtn.disabled = true;
+            loginBtn.innerHTML = 'Logging in<span class="loading"></span>';
+            
+            try {
+                const data = await login(username, password);
+                
+                accessToken = data.access_token;
+                refreshToken = data.refresh_token;
+                expiresAt = new Date(Date.now() + data.expires_in * 1000);
+                
+                // Get user info
+                userInfo = await getUserInfo();
+                
+                // Display user info
+                userInfoDiv.innerHTML = `
+                    <p><strong>Status:</strong> <span class="status online">Logged In</span></p>
+                    <p><strong>Username:</strong> ${userInfo.username}</p>
+                    <p><strong>Email:</strong> ${userInfo.email}</p>
+                    <p><strong>Name:</strong> ${userInfo.full_name}</p>
+                    <p><strong>Roles:</strong> ${userInfo.roles.slice(0, 3).join(', ')}</p>
+                `;
+                
+                // Show dashboard and chat
+                showSection(dashboardSection);
+                chatSection.classList.add('active');
+                
+                // Start token expiry countdown
+                updateTokenExpiresDisplay();
+                tokenRefreshInterval = setInterval(updateTokenExpiresDisplay, 1000);
+                
+                // Auto-refresh token before expiry
+                setTimeout(async () => {
+                    try {
+                        const refreshData = await refreshAccessToken();
+                        accessToken = refreshData.access_token;
+                        refreshToken = refreshData.refresh_token;
+                        expiresAt = new Date(Date.now() + refreshData.expires_in * 1000);
+                        console.log('Token auto-refreshed');
+                    } catch (error) {
+                        console.error('Auto-refresh failed:', error);
+                        await logout();
+                    }
+                }, (data.expires_in - 60) * 1000); // Refresh 1 minute before expiry
+                
+            } catch (error) {
+                showAlert(loginAlert, error.message, 'error');
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Login';
+            }
+        });
+        
+        logoutBtn.addEventListener('click', logout);
+        
+        sendBtn.addEventListener('click', async () => {
+            const prompt = chatPromptInput.value.trim();
+            
+            if (!prompt) {
+                return;
+            }
+            
+            // Add user message
+            chatMessages.innerHTML += `
+                <div class="chat-message user">
+                    <strong>You</strong>
+                    <div>${prompt}</div>
+                </div>
+            `;
+            
+            chatPromptInput.value = '';
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = 'Sending<span class="loading"></span>';
+            
+            try {
+                const response = await sendChatMessage(prompt);
+                
+                // Add bot response
+                chatMessages.innerHTML += `
+                    <div class="chat-message bot">
+                        <strong>Bot</strong>
+                        <div>${response.answer}</div>
+                    </div>
+                `;
+                
+                // Scroll to bottom
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                
+            } catch (error) {
+                chatMessages.innerHTML += `
+                    <div class="chat-message bot">
+                        <strong>Error</strong>
+                        <div style="color: #d32f2f;">${error.message}</div>
+                    </div>
+                `;
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send Message';
+            }
+        });
+        
+        // Allow Enter to send (Shift+Enter for new line)
+        chatPromptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendBtn.click();
+            }
+        });
+        
+        // Also allow Enter to login
+        [usernameInput, passwordInput].forEach(input => {
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    loginBtn.click();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

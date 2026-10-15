@@ -38,6 +38,34 @@ Proyek ini dikerjakan sebagai tugas besar (TUBES) Program Studi Teknik Informati
 
 Pengerjaan dijadwalkan 6 minggu dalam empat kelompok aktivitas: pembuatan database, antarmuka pengguna, kode program, dan pengujian.
 
+## Dokumentasi
+
+### 🚀 Quick Start
+- **[Development Environment](./README-dev-environment.md)** - Setup & running the project
+- **[Quick Reference](./docs/AUTH_QUICK_REFERENCE.md)** - Authentication cheat sheet
+
+### 🔐 Autentikasi & Security
+- **[Authentication Guide](./docs/AUTHENTICATION.md)** - Complete authentication documentation
+  - Login & JWT validation
+  - Token refresh & logout
+  - Role-based access control
+  - Client examples (cURL, Python, JavaScript)
+  - Troubleshooting guide
+- **[Implementation Summary](./docs/IMPLEMENTATION_SUMMARY.md)** - Technical implementation details
+
+### 💻 Examples
+- **[Client Examples](./examples/README.md)** - Working client implementations
+  - Python client with auto-refresh
+  - JavaScript/Node.js client
+  - Browser web UI
+
 ## Status
 
-Dalam tahap perencanaan dan pengembangan awal.
+✅ **Authentication System**: Complete (Keycloak + JWT validation)
+- Login/logout endpoints
+- Token refresh mechanism
+- Role-based access control
+- Python, JavaScript, and Browser clients
+- Comprehensive documentation
+
+🚧 **In Development**: RAG system, Frontend, Admin panel

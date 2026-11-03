@@ -238,3 +238,50 @@ class AuditVerificationResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db: str
+
+# ==========================================
+# 8. Admin & Audit Specific Schemas
+# ==========================================
+class RoleWithUserCountResponse(RoleResponse):
+    user_count: int = 0
+
+
+class DocumentUpdate(BaseModel):
+    classification: Optional[ClassificationType] = None
+
+
+class UserRoleUpdate(BaseModel):
+    role_id: Optional[int] = None
+    role_name: Optional[str] = None
+
+
+class DocumentItemResponse(DocumentResponse):
+    uploader_name: Optional[str] = None
+
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentItemResponse]
+    total: int
+    page: int
+    total_pages: int
+    summary: Dict[str, int]
+
+
+class DashboardHealthResponse(BaseModel):
+    queries_today: int
+    p95_latency_seconds: float
+    active_users_count: int
+    positive_feedback_ratio: float
+    positive_feedbacks_count: int
+    total_feedbacks_count: int
+    hourly_p95_latency: List[Dict[str, Any]]
+    services_status: Dict[str, Any]
+    documents_by_classification: Dict[str, int]
+    security_events_24h: Dict[str, int]
+
+
+class AuditLogListResponse(BaseModel):
+    logs: List[AuditLogResponse]
+    total: int
+    page: int
+    total_pages: int

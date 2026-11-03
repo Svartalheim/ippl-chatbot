@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .auth import UserInfo, current_user
 from .db import SessionLocal, engine, get_session
 from .models import init_db
-from .routers import auth, chat, llm
+from .routers import admin, audit, auth, chat, llm
 from .seed import seed_database
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,8 @@ app = FastAPI(
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(llm.router)
+app.include_router(admin.router)
+app.include_router(audit.router)
 
 
 @app.get("/health", tags=["System"])

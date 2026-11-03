@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { LogoutModal } from "../components/LogoutModal";
 import { useAuth } from "../context/AuthContext";
+import { BASE_URL } from "../api/client";
 
 export const AuditorLayout: React.FC = () => {
   const { user } = useAuth();
@@ -59,7 +60,7 @@ export const AuditorLayout: React.FC = () => {
             </NavLink>
 
             <a
-              href="http://localhost:8000/audit/export-csv"
+              href={`${BASE_URL}/audit/export-csv`}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium text-gray-400 hover:text-white hover:bg-[#1E1E1C] transition"

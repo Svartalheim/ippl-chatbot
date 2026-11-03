@@ -18,7 +18,7 @@ import {
   UserCheck,
   Users,
 } from "lucide-react";
-import { api } from "../../api/client";
+import { api, BASE_URL } from "../../api/client";
 
 interface DashboardData {
   queries_today: number;
@@ -107,7 +107,7 @@ export const AdminDashboardPage: React.FC = () => {
           </div>
 
           <a
-            href="http://localhost:8000/audit/export-csv"
+            href={`${BASE_URL}/audit/export-csv`}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-xl shadow-sm transition"

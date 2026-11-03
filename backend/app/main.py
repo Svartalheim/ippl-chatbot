@@ -42,7 +42,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Konfigurasi CORS untuk Frontend React
+# Konfigurasi CORS untuk Frontend React & Akses Jaringan (termasuk 100.102.226.75)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -50,7 +50,11 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://100.102.226.75:5173",
+        "http://100.102.226.75:3000",
+        "http://100.102.226.75:8000",
     ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|100\.102\.226\.75)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

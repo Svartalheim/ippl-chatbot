@@ -35,6 +35,7 @@ _valid_issuers = list(
             f"http://keycloak:8080/realms/{_realm}",
             f"http://localhost:8080/realms/{_realm}",
             f"http://127.0.0.1:8080/realms/{_realm}",
+            f"http://100.102.226.75:8080/realms/{_realm}",
         ]
     )
 )

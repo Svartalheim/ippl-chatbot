@@ -2,7 +2,18 @@
  * HTTP Client dengan penyisipan otomatis Bearer Token & auto-refresh token Keycloak.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const getApiBaseUrl = (): string => {
+  if (typeof window !== "undefined" && window.location && window.location.hostname) {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+      return `${protocol}//${hostname}:8000`;
+    }
+  }
+  return import.meta.env.VITE_API_URL || "http://localhost:8000";
+};
+
+export const BASE_URL = getApiBaseUrl();
 
 let isRefreshing = false;
 let failedQueue: Array<{

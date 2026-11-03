@@ -182,9 +182,15 @@ async def send_chat_query(
     chat_sess.updated_at = func.now()
 
     await session.commit()
-    await session.refresh(assistant_msg)
 
-    return assistant_msg
+    # Ambil ulang assistant_msg dengan relasi feedback untuk menghindari MissingGreenlet
+    refreshed_stmt = (
+        select(ChatMessage)
+        .options(selectinload(ChatMessage.feedback))
+        .where(ChatMessage.id == assistant_msg.id)
+    )
+    res_refreshed = await session.execute(refreshed_stmt)
+    return res_refreshed.scalar_one()
 
 
 @router.post("/messages/{message_id}/feedback", response_model=FeedbackResponse, summary="Kirim evaluasi feedback")

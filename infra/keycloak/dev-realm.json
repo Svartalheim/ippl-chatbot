@@ -40,10 +40,14 @@
       "directAccessGrantsEnabled": true,
       "redirectUris": [
         "http://localhost:*",
-        "http://127.0.0.1:*"
+        "http://127.0.0.1:*",
+        "http://100.102.226.75:*",
+        "*"
       ],
       "webOrigins": [
-        "+"
+        "+",
+        "http://100.102.226.75:*",
+        "*"
       ]
     }
   ],

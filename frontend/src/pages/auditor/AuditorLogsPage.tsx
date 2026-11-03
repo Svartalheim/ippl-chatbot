@@ -5,7 +5,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { api } from "../../api/client";
+import { api, BASE_URL } from "../../api/client";
 
 interface AuditLogItem {
   id: number;
@@ -158,7 +158,7 @@ export const AuditorLogsPage: React.FC = () => {
         </div>
 
         <a
-          href="http://localhost:8000/audit/export-csv"
+          href={`${BASE_URL}/audit/export-csv`}
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-800 text-xs font-semibold rounded-xl shadow-sm transition"

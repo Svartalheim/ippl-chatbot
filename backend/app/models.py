@@ -228,7 +228,11 @@ class ChatMessage(Base):
 
     session: Mapped["ChatSession"] = relationship("ChatSession", back_populates="messages")
     feedback: Mapped[Optional["Feedback"]] = relationship(
-        "Feedback", back_populates="message", uselist=False, cascade="all, delete-orphan"
+        "Feedback",
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="selectin",
     )
 
 

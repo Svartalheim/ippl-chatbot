@@ -267,7 +267,7 @@ async def get_user_allowed_classifications(
 
 
 async def current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     session: AsyncSession = Depends(get_session),
 ) -> UserInfo:
     """
@@ -287,7 +287,7 @@ async def current_user(
 
 
 async def optional_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     session: AsyncSession = Depends(get_session),
 ) -> Optional[UserInfo]:
     """

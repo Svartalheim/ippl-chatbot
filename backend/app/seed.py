@@ -418,3 +418,15 @@ async def seed_database(session: AsyncSession) -> None:
     logger.info(
         f"Seeding selesai! Verifikasi audit chain: {verification['verified']}, total entri: {verification['total_entries']}"
     )
+
+
+async def main():
+    from .db import SessionLocal
+    async with SessionLocal() as session:
+        await seed_database(session)
+        print("✅ Seeding basis data berhasil diselesaikan!")
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

@@ -17,6 +17,7 @@ from ..schemas import (
     ChatMessageResponse,
     ChatSessionCreate,
     ChatSessionResponse,
+    FeedbackBase,
     FeedbackCreate,
     FeedbackResponse,
 )

@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str
     ollama_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.2:3b"
+    ollama_embed_model: str = "nomic-embed-text"
 
     keycloak_internal_url: str = "http://keycloak:8080"  # untuk ambil JWKS (antar-container)
     keycloak_public_url: str = "http://localhost:8080"   # nilai `iss` di token

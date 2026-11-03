@@ -1,15 +1,38 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .auth import current_user, UserInfo
-from .db import get_session
-from .routers import llm, auth
+from .auth import UserInfo, current_user
+from .db import engine, get_session
+from .models import init_db
+from .routers import auth, llm
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Siklus hidup aplikasi: menginisialisasi ekstensi PostgreSQL,
+    skema tabel, indeks HNSW, dan trigger append-only audit_logs.
+    """
+    try:
+        logger.info("Menginisialisasi skema database PostgreSQL & pgvector...")
+        await init_db(engine)
+        logger.info("Inisialisasi skema database berhasil.")
+    except Exception as e:
+        logger.error(f"Peringatan: Gagal menginisialisasi database saat startup: {e}")
+    yield
+
 
 app = FastAPI(
     title="IPPL Chatbot API",
     description="API untuk chatbot dengan autentikasi Keycloak dan LLM integration",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Include routers

@@ -60,17 +60,11 @@ python examples/python_client.py
 node examples/javascript_client.js
 ```
 
-**User default:** `dev` / `dev` (client publik `fastapi-app`)
+**User default:** `dev` / `dev` (peran Karyawan, client publik `fastapi-app`). Akun per peran: lihat README.md.
 
-## Dokumentasi Lengkap
+## Panduan Lengkap
 
-📚 **Autentikasi & JWT**: Lihat [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) untuk:
-- Flow autentikasi lengkap
-- Semua endpoints autentikasi
-- Cara menggunakan token
-- Role-based access control
-- Auto-refresh pattern
-- Troubleshooting
+Instalasi langkah demi langkah, akun uji, pengujian, dan troubleshooting ada di [README.md](README.md).
 
 ## Reset total
 `make reset` (hapus semua volume, termasuk data DB & model Ollama).

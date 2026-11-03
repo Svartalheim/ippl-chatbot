@@ -1,11 +1,18 @@
 """
-Router untuk autentikasi Keycloak
+Router untuk autentikasi Keycloak dengan pencatatan audit log & sinkronisasi pengguna.
 """
-import httpx
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from typing import Optional
+import uuid
 
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..auth import UserInfo, current_user, decode_token, optional_user, sync_user_to_db
 from ..config import settings
+from ..db import get_session
+from ..services.audit_service import record_audit_log
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -37,23 +44,17 @@ def _keycloak_token_url() -> str:
 
 
 @router.post("/login", response_model=TokenResponse, summary="Login dengan Keycloak")
-async def login(req: LoginRequest):
+async def login(
+    req: LoginRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
     """
     Login menggunakan username dan password Keycloak.
-    
-    Mengembalikan access_token dan refresh_token yang dapat digunakan untuk autentikasi.
-    
-    **Cara menggunakan:**
-    ```bash
-    # Login dan simpan token
-    TOKEN=$(curl -X POST http://localhost:8000/auth/login \\
-      -H "Content-Type: application/json" \\
-      -d '{"username":"dev","password":"dev"}' | jq -r .access_token)
-    
-    # Gunakan token untuk request lain
-    curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/me
-    ```
+    Mencatat event LOGIN atau LOGIN_FAILED ke tabel audit_logs.
     """
+    client_ip = request.client.host if request.client else None
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -67,23 +68,71 @@ async def login(req: LoginRequest):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10.0,
             )
-            
+
             if response.status_code != 200:
-                error_detail = response.json().get("error_description", "Login gagal")
+                error_detail = response.json().get("error_description", "Kredensial tidak valid")
+                await record_audit_log(
+                    session=session,
+                    actor_name=req.username,
+                    actor_role="Unknown",
+                    action="LOGIN_FAILED",
+                    detail=f"Login gagal untuk username '{req.username}': {error_detail}",
+                    status="Gagal",
+                    actor_user_id=None,
+                    ip_address=client_ip,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail=f"Autentikasi gagal: {error_detail}",
                 )
-            
+
             data = response.json()
+            access_token = data["access_token"]
+
+            # Sinkronisasi user & catat audit log
+            actor_user_id: Optional[uuid.UUID] = None
+            actor_name = req.username
+            actor_role = "Karyawan"
+
+            try:
+                payload = decode_token(access_token)
+                user_info = UserInfo(payload)
+                db_user = await sync_user_to_db(session, user_info)
+                actor_user_id = db_user.id
+                actor_name = user_info.full_name or user_info.username
+                actor_role = getattr(user_info, "role_name", "Karyawan")
+            except Exception:
+                pass
+
+            await record_audit_log(
+                session=session,
+                actor_name=actor_name,
+                actor_role=actor_role,
+                action="LOGIN",
+                detail=f"Login berhasil via Keycloak untuk pengguna '{req.username}'",
+                status="Berhasil",
+                actor_user_id=actor_user_id,
+                ip_address=client_ip,
+            )
+
             return TokenResponse(
                 access_token=data["access_token"],
                 refresh_token=data["refresh_token"],
                 expires_in=data["expires_in"],
                 refresh_expires_in=data["refresh_expires_in"],
             )
-            
+
         except httpx.RequestError as e:
+            await record_audit_log(
+                session=session,
+                actor_name=req.username,
+                actor_role="Unknown",
+                action="LOGIN_FAILED",
+                detail=f"Keycloak tidak dapat dihubungi: {str(e)}",
+                status="Gagal",
+                actor_user_id=None,
+                ip_address=client_ip,
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Keycloak tidak dapat dihubungi: {str(e)}",
@@ -94,16 +143,6 @@ async def login(req: LoginRequest):
 async def refresh_token(req: RefreshTokenRequest):
     """
     Refresh access token menggunakan refresh token.
-    
-    Access token biasanya expired dalam waktu singkat (default 5 menit).
-    Gunakan refresh token untuk mendapatkan access token baru tanpa login ulang.
-    
-    **Contoh:**
-    ```bash
-    curl -X POST http://localhost:8000/auth/refresh \\
-      -H "Content-Type: application/json" \\
-      -d '{"refresh_token":"YOUR_REFRESH_TOKEN"}'
-    ```
     """
     async with httpx.AsyncClient() as client:
         try:
@@ -117,13 +156,13 @@ async def refresh_token(req: RefreshTokenRequest):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10.0,
             )
-            
+
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Refresh token tidak valid atau sudah expired",
                 )
-            
+
             data = response.json()
             return TokenResponse(
                 access_token=data["access_token"],
@@ -131,7 +170,7 @@ async def refresh_token(req: RefreshTokenRequest):
                 expires_in=data["expires_in"],
                 refresh_expires_in=data["refresh_expires_in"],
             )
-            
+
         except httpx.RequestError as e:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -140,25 +179,21 @@ async def refresh_token(req: RefreshTokenRequest):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="Logout dan revoke token")
-async def logout(req: LogoutRequest):
+async def logout(
+    req: LogoutRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    user: Optional[UserInfo] = Depends(optional_user),
+):
     """
-    Logout dan revoke refresh token di Keycloak.
-    
-    Setelah logout, refresh token tidak bisa digunakan lagi.
-    Access token akan tetap valid sampai expired (tidak bisa di-revoke).
-    
-    **Contoh:**
-    ```bash
-    curl -X POST http://localhost:8000/auth/logout \\
-      -H "Content-Type: application/json" \\
-      -d '{"refresh_token":"YOUR_REFRESH_TOKEN"}'
-    ```
+    Logout dan revoke refresh token di Keycloak serta catat event LOGOUT ke audit_logs.
     """
     logout_url = f"{settings.keycloak_internal_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/logout"
-    
+    client_ip = request.client.host if request.client else None
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(
+            await client.post(
                 logout_url,
                 data={
                     "client_id": settings.keycloak_client_id,
@@ -167,31 +202,45 @@ async def logout(req: LogoutRequest):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10.0,
             )
-            
-            # Keycloak mengembalikan 204 jika berhasil
-            if response.status_code not in (204, 200):
-                # Tetap return success, karena token mungkin sudah expired
-                pass
-                
-        except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Keycloak tidak dapat dihubungi: {str(e)}",
-            )
+        except httpx.RequestError:
+            pass
+
+    # Catat audit log LOGOUT
+    actor_name = user.full_name if user else "Pengguna"
+    actor_role = getattr(
+        user, "role_name", user.roles[0] if (user and user.roles) else "Karyawan"
+    )
+    actor_id: Optional[uuid.UUID] = (
+        uuid.UUID(user.db_id) if (user and user.db_id) else None
+    )
+
+    await record_audit_log(
+        session=session,
+        actor_name=actor_name,
+        actor_role=actor_role,
+        action="LOGOUT",
+        detail="Sesi pengguna dicabut dan logout berhasil",
+        status="Berhasil",
+        actor_user_id=actor_id,
+        ip_address=client_ip,
+    )
+
+
+@router.get("/userinfo", summary="Mendapatkan informasi user aktif")
+async def userinfo(user: UserInfo = Depends(current_user)):
+    """
+    Mendapatkan profil pengguna aktif yang diautentikasi dengan token JWT.
+    """
+    return user.to_dict()
 
 
 @router.get("/introspect", summary="Introspect token (untuk debugging)")
 async def introspect_token(token: str):
     """
     Introspect token untuk melihat informasi detail (berguna untuk debugging).
-    
-    **Contoh:**
-    ```bash
-    curl "http://localhost:8000/auth/introspect?token=YOUR_ACCESS_TOKEN"
-    ```
     """
     introspect_url = f"{settings.keycloak_internal_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/token/introspect"
-    
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -203,15 +252,15 @@ async def introspect_token(token: str):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=10.0,
             )
-            
+
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Tidak dapat introspect token",
                 )
-            
+
             return response.json()
-            
+
         except httpx.RequestError as e:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

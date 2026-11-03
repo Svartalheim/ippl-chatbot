@@ -6,9 +6,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import UserInfo, current_user
-from .db import engine, get_session
+from .db import SessionLocal, engine, get_session
 from .models import init_db
 from .routers import auth, llm
+from .seed import seed_database
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +18,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Siklus hidup aplikasi: menginisialisasi ekstensi PostgreSQL,
-    skema tabel, indeks HNSW, dan trigger append-only audit_logs.
+    skema tabel, indeks HNSW, trigger append-only audit_logs,
+    serta menjalankan seeding awal pengguna & dokumen.
     """
     try:
         logger.info("Menginisialisasi skema database PostgreSQL & pgvector...")
         await init_db(engine)
         logger.info("Inisialisasi skema database berhasil.")
+
+        logger.info("Memeriksa dan menjalankan seeding awal basis data...")
+        async with SessionLocal() as session:
+            await seed_database(session)
     except Exception as e:
-        logger.error(f"Peringatan: Gagal menginisialisasi database saat startup: {e}")
+        logger.error(f"Peringatan saat inisialisasi / seeding database: {e}")
     yield
 
 
@@ -51,7 +57,7 @@ async def health(session: AsyncSession = Depends(get_session)):
 async def me(user: UserInfo = Depends(current_user)):
     """
     Mendapatkan informasi user yang sedang login dari JWT token.
-    
+
     Memerlukan header: `Authorization: Bearer <access_token>`
     """
     return user.to_dict()

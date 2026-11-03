@@ -3,6 +3,34 @@
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      {
+        "name": "Karyawan",
+        "description": "Peran Karyawan - akses dokumen Public"
+      },
+      {
+        "name": "HR",
+        "description": "Peran HR - akses dokumen Public dan HR"
+      },
+      {
+        "name": "Finance",
+        "description": "Peran Finance - akses dokumen Public dan Finance"
+      },
+      {
+        "name": "Manajemen",
+        "description": "Peran Manajemen - akses seluruh klasifikasi dokumen"
+      },
+      {
+        "name": "Admin",
+        "description": "Peran Admin - pengelola dokumen dan RBAC"
+      },
+      {
+        "name": "Auditor",
+        "description": "Peran Auditor - tinjau log audit (read-only)"
+      }
+    ]
+  },
   "clients": [
     {
       "clientId": "fastapi-app",
@@ -10,8 +38,13 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
-      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
-      "webOrigins": ["+"]
+      "redirectUris": [
+        "http://localhost:*",
+        "http://127.0.0.1:*"
+      ],
+      "webOrigins": [
+        "+"
+      ]
     }
   ],
   "users": [
@@ -22,7 +55,124 @@
       "lastName": "User",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "dev", "temporary": false }]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Karyawan"
+      ]
+    },
+    {
+      "username": "rina",
+      "email": "rina.pratama@perusahaan.co.id",
+      "firstName": "Rina",
+      "lastName": "Pratama",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "HR"
+      ]
+    },
+    {
+      "username": "dimas",
+      "email": "dimas.fajar@perusahaan.co.id",
+      "firstName": "Dimas",
+      "lastName": "Fajar",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Finance"
+      ]
+    },
+    {
+      "username": "sari",
+      "email": "sari.wulandari@perusahaan.co.id",
+      "firstName": "Sari",
+      "lastName": "Wulandari",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Manajemen"
+      ]
+    },
+    {
+      "username": "budi",
+      "email": "budi.santoso@perusahaan.co.id",
+      "firstName": "Budi",
+      "lastName": "Santoso",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Auditor"
+      ]
+    },
+    {
+      "username": "andi",
+      "email": "andi.nugroho@perusahaan.co.id",
+      "firstName": "Andi",
+      "lastName": "Nugroho",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Karyawan"
+      ]
+    },
+    {
+      "username": "admin_sistem",
+      "email": "admin@perusahaan.co.id",
+      "firstName": "Admin",
+      "lastName": "Sistem",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Admin"
+      ]
     }
   ]
 }

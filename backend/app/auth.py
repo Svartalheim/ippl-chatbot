@@ -2,6 +2,8 @@
 Modul autentikasi dan validasi JWT dengan Keycloak
 Menyediakan sinkronisasi user ke basis data, verifikasi RBAC, dan dependency user.
 """
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import List, Optional
 

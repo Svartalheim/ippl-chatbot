@@ -25,8 +25,16 @@ from ..models import Document, DocumentChunk
 logger = logging.getLogger(__name__)
 
 # Direktori penyimpanan file yang diunggah
-STORAGE_DIR = Path("data/documents")
-STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+STORAGE_DIR = Path(
+    os.environ.get(
+        "STORAGE_DIR",
+        str(Path(__file__).resolve().parent.parent.parent / "data" / "documents"),
+    )
+)
+try:
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 # Import opsional pypdf dan docx (graceful fallback)
 try:

@@ -27,7 +27,17 @@ _jwks = jwt.PyJWKClient(
     cache_keys=True,  # Cache public keys untuk performa
     max_cached_keys=16,
 )
-_issuer = f"{settings.keycloak_public_url}/realms/{_realm}"
+_valid_issuers = list(
+    dict.fromkeys(
+        [
+            f"{settings.keycloak_public_url}/realms/{_realm}",
+            f"{settings.keycloak_internal_url}/realms/{_realm}",
+            f"http://keycloak:8080/realms/{_realm}",
+            f"http://localhost:8080/realms/{_realm}",
+            f"http://127.0.0.1:8080/realms/{_realm}",
+        ]
+    )
+)
 
 KNOWN_ROLES = ["Admin", "Manajemen", "Finance", "HR", "Auditor", "Karyawan"]
 
@@ -144,9 +154,10 @@ def decode_token(token: str) -> dict:
             token,
             key,
             algorithms=["RS256"],
-            issuer=_issuer,
+            issuer=_valid_issuers,
             options={
                 "verify_aud": False,  # Keycloak default aud = "account"
+                "verify_iss": True,
                 "verify_exp": True,
                 "verify_iat": True,
                 "verify_nbf": True,

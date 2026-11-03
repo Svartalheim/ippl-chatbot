@@ -2,22 +2,26 @@
 
 PYTEST ?= $(shell if [ -f .venv/bin/pytest ]; then echo ".venv/bin/pytest"; else which pytest 2>/dev/null || echo "pytest"; fi)
 PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo ".venv/bin/python3"; else which python3 2>/dev/null || echo "python3"; fi)
+DOCKER_COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; elif which docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo "docker compose"; fi)
 
 init:
 	@test -f .env || cp .env.example .env
 	@echo ".env siap."
 
-up: init
-	docker compose up -d --build
+check-daemon:
+	@docker info >/dev/null 2>&1 || (echo "⚠️ Docker daemon belum aktif! Jika menggunakan Colima di macOS, jalankan 'colima start'." && exit 1)
+
+up: init check-daemon
+	$(DOCKER_COMPOSE) up -d --build
 
 down:
-	docker compose down
+	$(DOCKER_COMPOSE) down
 
 logs:
-	docker compose logs -f backend keycloak
+	$(DOCKER_COMPOSE) logs -f backend keycloak
 
 reset:
-	docker compose down -v
+	$(DOCKER_COMPOSE) down -v
 
 # Ambil access token user dev/dev
 token:

@@ -1,11 +1,20 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AdminLayout } from "./layouts/AdminLayout";
+import { AuditorLayout } from "./layouts/AuditorLayout";
+import { AdminDashboardPage } from "./pages/admin/AdminDashboardPage";
+import { AdminDocumentsPage } from "./pages/admin/AdminDocumentsPage";
+import { AdminRolesPage } from "./pages/admin/AdminRolesPage";
+import { AuditorLogsPage } from "./pages/auditor/AuditorLogsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { LoginPage } from "./pages/LoginPage";
 
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuth();
+const ProtectedRoute: React.FC<{
+  children: React.ReactNode;
+  requiredRole?: "Admin" | "Auditor";
+}> = ({ children, requiredRole }) => {
+  const { isAuthenticated, isLoading, canManageDocs, canViewAudit } = useAuth();
 
   if (isLoading) {
     return (
@@ -16,7 +25,19 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     );
   }
 
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (requiredRole === "Admin" && !canManageDocs) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (requiredRole === "Auditor" && !canViewAudit) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
 };
 
 export const App: React.FC = () => {
@@ -33,6 +54,28 @@ export const App: React.FC = () => {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute requiredRole="Admin">
+                <AdminLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<AdminDashboardPage />} />
+            <Route path="documents" element={<AdminDocumentsPage />} />
+            <Route path="roles" element={<AdminRolesPage />} />
+          </Route>
+          <Route
+            path="/auditor"
+            element={
+              <ProtectedRoute requiredRole="Auditor">
+                <AuditorLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<AuditorLogsPage />} />
+          </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

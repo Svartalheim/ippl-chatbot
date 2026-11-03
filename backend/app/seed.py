@@ -6,7 +6,7 @@ import logging
 import math
 import hashlib
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Tuple
 import uuid
 
 import httpx
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import settings
 from .models import Document, DocumentChunk, Role, User
 from .services.audit_service import record_audit_log, verify_audit_chain
+from .services.ingestion_service import document_embedding_text, embedding_version, ollama_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -42,29 +43,19 @@ def deterministic_mock_embedding(text: str, dim: int = 768) -> List[float]:
     return [round(x / norm, 6) for x in vec]
 
 
-async def get_embedding(text: str) -> List[float]:
+async def get_embedding(text: str) -> Tuple[List[float], str]:
     """
-    Mencoba membuat embedding melalui Ollama API.
-    Jika Ollama offline atau belum siap, gunakan fallback deterministik.
+    Membuat embedding via Ollama. Bila model belum siap (umum saat startup pertama,
+    karena ollama-pull masih mengunduh model), gunakan vektor mock sementara dan
+    beri label 'mock'. Tugas latar belakang reembed_when_model_ready() akan
+    menggantinya dengan vektor Ollama asli setelah model tersedia.
     """
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            res = await client.post(
-                f"{settings.ollama_url}/api/embeddings",
-                json={
-                    "model": settings.ollama_embed_model,
-                    "prompt": text,
-                },
-            )
-            if res.status_code == 200:
-                data = res.json()
-                emb = data.get("embedding")
-                if emb and len(emb) == 768:
-                    return emb
-    except Exception:
-        pass
-
-    return deterministic_mock_embedding(text, dim=768)
+    if not getattr(settings, "allow_mock_embedding", False):
+        try:
+            return await ollama_embedding(text, timeout=5.0, kind="document"), embedding_version()
+        except Exception:
+            pass
+    return deterministic_mock_embedding(text, dim=768), "mock"
 
 
 async def seed_database(session: AsyncSession) -> None:
@@ -369,7 +360,9 @@ async def seed_database(session: AsyncSession) -> None:
         await session.flush()
 
         for c in chunks:
-            emb = await get_embedding(c["content"])
+            emb, emb_source = await get_embedding(
+                document_embedding_text(doc_obj.filename, c.get("section_title"), c["content"])
+            )
             chunk_obj = DocumentChunk(
                 id=uuid.uuid4(),
                 document_id=doc_obj.id,
@@ -384,6 +377,7 @@ async def seed_database(session: AsyncSession) -> None:
                     "classification": doc_obj.classification,
                     "page_number": c.get("page_number"),
                     "section_title": c.get("section_title"),
+                    "embedding_source": emb_source,
                 },
             )
             session.add(chunk_obj)

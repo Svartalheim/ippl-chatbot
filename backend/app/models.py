@@ -325,23 +325,46 @@ async def init_db(engine: AsyncEngine) -> None:
             )
         )
 
-        # 4. Trigger Append-Only untuk audit_logs
-        await conn.execute(
-            text(
-                """
-                CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
-                RETURNS TRIGGER AS $$
-                BEGIN
-                    RAISE EXCEPTION 'Operasi % pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.', TG_OP;
-                    RETURN NULL;
-                END;
-                $$ LANGUAGE plpgsql;
+        # 4. Trigger append-only untuk audit_logs.
+        # PENTING: driver asyncpg menolak beberapa perintah SQL dalam satu execute()
+        # ("cannot insert multiple commands into a prepared statement"), jadi setiap
+        # perintah dijalankan terpisah.
+        for stmt in AUDIT_LOG_TRIGGER_STATEMENTS:
+            await conn.execute(text(stmt))
 
-                DROP TRIGGER IF EXISTS trg_prevent_audit_log_modification ON audit_logs;
-                CREATE TRIGGER trg_prevent_audit_log_modification
-                BEFORE UPDATE OR DELETE ON audit_logs
-                FOR EACH ROW
-                EXECUTE FUNCTION prevent_audit_log_modification();
-                """
-            )
-        )
+
+AUDIT_LOG_TRIGGER_STATEMENTS = [
+    """
+    CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'Operasi % pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.', TG_OP;
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+    """,
+    "DROP TRIGGER IF EXISTS trg_prevent_audit_log_modification ON audit_logs",
+    """
+    CREATE TRIGGER trg_prevent_audit_log_modification
+    BEFORE UPDATE OR DELETE ON audit_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_audit_log_modification()
+    """,
+    # Trigger baris tidak menangkap TRUNCATE, sehingga butuh trigger tingkat statement.
+    """
+    CREATE OR REPLACE FUNCTION prevent_audit_log_truncate()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'Operasi TRUNCATE pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.';
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+    """,
+    "DROP TRIGGER IF EXISTS trg_prevent_audit_log_truncate ON audit_logs",
+    """
+    CREATE TRIGGER trg_prevent_audit_log_truncate
+    BEFORE TRUNCATE ON audit_logs
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION prevent_audit_log_truncate()
+    """,
+]

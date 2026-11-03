@@ -310,7 +310,11 @@ class TestRetrievalModule:
         mock_session.execute.side_effect = [mock_res_allowed, mock_res_global, mock_res_audit]
 
         with patch.object(settings, "allow_mock_embedding", True), \
-             patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock):
+             patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock), \
+             patch(
+                 "backend.app.services.rag_service._ollama_chat",
+                 new=AsyncMock(return_value="Jam kerja kantor dimulai pukul 08:00 WIB [1]."),
+             ):
             res = await execute_rag_query(
                 session=mock_session,
                 query="Kapan jam kerja kantor dimulai?",
@@ -401,3 +405,159 @@ class TestGenerationModule:
         assert fb.message_id == msg_id
         assert fb.is_positive is True
         assert fb.comment == "Sangat membantu"
+
+
+# ============================================================================
+# 5. KUALITAS JAWABAN: hanya sumber relevan & dikutip, kegagalan LLM terlihat
+# ============================================================================
+def _row(score, filename, classification="Public", content="isi"):
+    return {
+        "id": uuid.uuid4(),
+        "document_id": uuid.uuid4(),
+        "chunk_index": 0,
+        "content": content,
+        "page_number": 1,
+        "section_title": "Bagian",
+        "classification": classification,
+        "filename": filename,
+        "score": score,
+    }
+
+
+def _session_with(rows):
+    session = AsyncMock()
+    res_allowed = MagicMock()
+    res_allowed.mappings().all.return_value = rows
+    res_global = MagicMock()
+    res_global.mappings().first.return_value = rows[0] if rows else None
+    session.execute.side_effect = [res_allowed, res_global]
+    return session
+
+
+class TestAnswerQuality:
+    @pytest.mark.asyncio
+    async def test_low_scores_return_not_found_without_sources(self):
+        """Pertanyaan tanpa dokumen relevan (mis. rata-rata gaji) tidak boleh menampilkan sumber acak."""
+        from backend.app.services.rag_service import NOT_FOUND_ANSWER
+
+        rows = [_row(0.30, "Panduan Portal HR.pdf"), _row(0.29, "Jadwal Libur Nasional 2026.pdf")]
+        llm = AsyncMock(return_value="tidak boleh dipanggil")
+        with patch.object(settings, "allow_mock_embedding", True), \
+             patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock), \
+             patch("backend.app.services.rag_service._ollama_chat", new=llm):
+            res = await execute_rag_query(
+                session=_session_with(rows), query="Berapakah rata-rata gaji karyawan?",
+                user_name="Dimas Fajar", user_role="Finance",
+                allowed_classifications=["Public", "Finance"], similarity_threshold=0.55,
+            )
+        assert res["status"] == "SUCCESS"
+        assert res["answer"] == NOT_FOUND_ANSWER
+        assert res["citations"] == []
+        llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_llm_not_found_reply_drops_sources(self):
+        from backend.app.services.rag_service import NOT_FOUND_ANSWER
+
+        rows = [_row(0.70, "Panduan Portal HR.pdf"), _row(0.68, "Anggaran Bonus 2026.pdf", "Finance")]
+        with patch.object(settings, "allow_mock_embedding", True), \
+             patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock), \
+             patch("backend.app.services.rag_service._ollama_chat", new=AsyncMock(return_value=NOT_FOUND_ANSWER)):
+            res = await execute_rag_query(
+                session=_session_with(rows), query="Berapakah rata-rata gaji karyawan?",
+                user_name="Dimas Fajar", user_role="Finance",
+                allowed_classifications=["Public", "Finance"], similarity_threshold=0.55,
+            )
+        assert res["answer"] == NOT_FOUND_ANSWER
+        assert res["citations"] == []
+
+    @pytest.mark.asyncio
+    async def test_only_cited_sources_returned_and_renumbered(self):
+        rows = [
+            _row(0.80, "Panduan Portal HR.pdf"),
+            _row(0.79, "Peraturan Perusahaan 2026.pdf", "HR"),
+            _row(0.78, "Jadwal Libur Nasional 2026.pdf"),
+        ]
+        answer = "Hak cuti tahunan adalah 12 hari [2]. Pengajuan lewat portal HR [2]. Lihat juga [9]."
+        with patch.object(settings, "allow_mock_embedding", True), \
+             patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock), \
+             patch("backend.app.services.rag_service._ollama_chat", new=AsyncMock(return_value=answer)):
+            res = await execute_rag_query(
+                session=_session_with(rows), query="Berapa hak cuti tahunan?",
+                user_name="Rina Pratama", user_role="HR",
+                allowed_classifications=["Public", "HR"], similarity_threshold=0.55,
+            )
+        assert [c["filename"] for c in res["citations"]] == ["Peraturan Perusahaan 2026.pdf"]
+        assert res["citations"][0]["index"] == 1
+        assert "[1]" in res["answer"] and "[2]" not in res["answer"] and "[9]" not in res["answer"]
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_returns_error_not_raw_chunk(self):
+        rows = [_row(0.80, "Panduan Portal HR.pdf", content="ISI CHUNK MENTAH")]
+        audit = AsyncMock()
+        with patch.object(settings, "allow_mock_embedding", True), \
+             patch("backend.app.services.rag_service.record_audit_log", new=audit), \
+             patch("backend.app.services.rag_service._ollama_chat", new=AsyncMock(side_effect=RuntimeError("HTTP 404"))):
+            res = await execute_rag_query(
+                session=_session_with(rows), query="Bagaimana prosedur cuti?",
+                user_name="Andi Nugroho", user_role="Karyawan",
+                allowed_classifications=["Public"], similarity_threshold=0.55,
+            )
+        assert res["status"] == "ERROR"
+        assert "ISI CHUNK MENTAH" not in res["answer"]
+        assert res["citations"] == []
+        assert audit.call_args.kwargs["status"] == "Gagal"
+
+    @pytest.mark.parametrize("q", [
+        "dokumen apa saja yang bisa aku akses?",
+        "Dokumen apa yang dapat saya lihat?",
+        "tampilkan daftar dokumen",
+        "apa saja dokumen yang tersedia?",
+    ])
+    def test_document_list_question_detected(self, q):
+        from backend.app.services.rag_service import is_document_list_question
+        assert is_document_list_question(q)
+
+    @pytest.mark.parametrize("q", [
+        "apa isi dari laporan keuangan q3?",
+        "Berapa hari hak cuti tahunan karyawan?",
+        "Bagaimana prosedur pengajuan cuti di portal HR?",
+    ])
+    def test_content_question_not_treated_as_document_list(self, q):
+        from backend.app.services.rag_service import is_document_list_question
+        assert not is_document_list_question(q)
+
+    @pytest.mark.asyncio
+    async def test_document_list_only_shows_allowed_classifications(self):
+        session = AsyncMock()
+        res_docs = MagicMock()
+        res_docs.mappings().all.return_value = [
+            {"filename": "Anggaran Bonus 2026.pdf", "classification": "Finance"},
+            {"filename": "Panduan Portal HR.pdf", "classification": "Public"},
+        ]
+        session.execute.return_value = res_docs
+        with patch("backend.app.services.rag_service.record_audit_log", new_callable=AsyncMock):
+            res = await execute_rag_query(
+                session=session, query="dokumen apa saja yang bisa aku akses?",
+                user_name="Dimas Fajar", user_role="Finance",
+                allowed_classifications=["Public", "Finance"],
+            )
+        params = session.execute.call_args.args[1]
+        assert params["allowed"] == ["Public", "Finance"]
+        assert "Anggaran Bonus 2026.pdf" in res["answer"]
+        assert res["citations"] == []
+
+    @pytest.mark.parametrize("q", ["halo", "Halo!", "hai kak", "selamat pagi", "terima kasih banyak", "thanks"])
+    def test_small_talk_detected(self, q):
+        from backend.app.services.rag_service import is_small_talk
+        assert is_small_talk(q)
+
+    @pytest.mark.parametrize("q", [
+        "halo, berapa hari hak cuti tahunan?",
+        "apa isi dari laporan keuangan q3?",
+        "selamat pagi, bagaimana prosedur cuti di portal HR?",
+    ])
+    def test_real_questions_not_small_talk(self, q):
+        from backend.app.services.rag_service import is_small_talk
+        assert not is_small_talk(q)
+

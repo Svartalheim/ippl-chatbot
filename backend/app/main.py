@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from .db import SessionLocal, engine, get_session
 from .models import init_db
 from .routers import admin, audit, auth, chat, llm
 from .seed import seed_database
+from .services.ingestion_service import reembed_when_model_ready
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,11 @@ async def lifespan(app: FastAPI):
             await seed_database(session)
     except Exception as e:
         logger.error(f"Peringatan saat inisialisasi / seeding database: {e}")
+
+    # Ganti vektor mock (dari seed saat model embedding belum siap) dengan vektor Ollama asli
+    reembed_task = asyncio.create_task(reembed_when_model_ready(SessionLocal))
     yield
+    reembed_task.cancel()
 
 
 app = FastAPI(

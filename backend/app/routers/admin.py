@@ -23,7 +23,9 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import UserInfo, current_user, require_roles
+from fastapi.responses import FileResponse
+
+from ..auth import UserInfo, current_user, get_user_allowed_classifications, require_roles
 from ..config import settings
 from ..db import get_session
 from ..models import ChatMessage, Document, DocumentChunk, Feedback, Role, User
@@ -457,6 +459,122 @@ async def update_document(
         )
 
     return doc
+
+
+_MEDIA_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+async def _get_viewable_document(
+    doc_id: uuid.UUID, request: Request, session: AsyncSession, user: UserInfo
+) -> Document:
+    """
+    Ambil dokumen untuk dilihat, dengan menegakkan matriks RBAC: hak 'kelola dokumen'
+    tidak sama dengan hak membaca isi. Peran hanya boleh membuka dokumen yang
+    klasifikasinya ada di allowed_classifications perannya. Setiap akses dicatat (DOC_VIEW).
+    """
+    doc = (await session.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dokumen tidak ditemukan.")
+
+    role_name = getattr(user, "role_name", "Admin")
+    allowed = await get_user_allowed_classifications(session, role_name)
+    user_id = uuid.UUID(user.db_id) if user.db_id else None
+    client_ip = request.client.host if request.client else None
+
+    if doc.classification not in allowed:
+        await record_audit_log(
+            session=session,
+            actor_name=user.full_name or user.username,
+            actor_role=role_name,
+            action="DOC_VIEW",
+            detail=f"Akses isi dokumen '{doc.filename}' ({doc.classification}) ditolak matriks RBAC",
+            status="Ditolak RBAC",
+            actor_user_id=user_id,
+            ip_address=client_ip,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Dokumen berklasifikasi {doc.classification} berada di luar hak akses baca "
+                f"peran {role_name} ({', '.join(allowed) or 'tidak ada'})."
+            ),
+        )
+
+    await record_audit_log(
+        session=session,
+        actor_name=user.full_name or user.username,
+        actor_role=role_name,
+        action="DOC_VIEW",
+        detail=f"Membuka dokumen '{doc.filename}' ({doc.classification})",
+        status="Berhasil",
+        actor_user_id=user_id,
+        ip_address=client_ip,
+    )
+    return doc
+
+
+@router.get("/documents/{doc_id}/preview", summary="Pratinjau isi dokumen (teks per chunk)")
+async def preview_document(
+    doc_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    user: UserInfo = Depends(current_user),
+):
+    """
+    Mengembalikan metadata dokumen, apakah file aslinya tersimpan, dan teks hasil ekstraksi
+    per chunk. Dipakai untuk dokumen tanpa file asli (seed) dan DOCX (tidak bisa dirender browser).
+    """
+    doc = await _get_viewable_document(doc_id, request, session, user)
+    chunks = (
+        await session.execute(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_id == doc.id)
+            .order_by(DocumentChunk.chunk_index.asc())
+        )
+    ).scalars().all()
+    return {
+        "id": str(doc.id),
+        "filename": doc.filename,
+        "file_type": doc.file_type,
+        "classification": doc.classification,
+        "has_file": (STORAGE_DIR / f"{doc.id}_{doc.filename}").exists(),
+        "chunks": [
+            {
+                "chunk_index": c.chunk_index,
+                "page_number": c.page_number,
+                "section_title": c.section_title,
+                "content": c.content,
+            }
+            for c in chunks
+        ],
+    }
+
+
+@router.get("/documents/{doc_id}/file", summary="Buka file asli dokumen")
+async def get_document_file(
+    doc_id: uuid.UUID,
+    request: Request,
+    download: bool = Query(False, description="true = unduh sebagai lampiran"),
+    session: AsyncSession = Depends(get_session),
+    user: UserInfo = Depends(current_user),
+):
+    doc = await _get_viewable_document(doc_id, request, session, user)
+    path = STORAGE_DIR / f"{doc.id}_{doc.filename}"
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File asli tidak tersimpan (mis. dokumen seed). Gunakan pratinjau teks.",
+        )
+    return FileResponse(
+        path,
+        media_type=_MEDIA_TYPES.get(doc.file_type, "application/octet-stream"),
+        filename=doc.filename,
+        content_disposition_type="attachment" if download else "inline",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.delete("/documents/{doc_id}", summary="Hapus dokumen")

@@ -359,3 +359,57 @@ class TestAuditLogImmutabilitySecurity:
         assert res["verified"] is False
         assert res["broken_at_id"] == 2
         assert res["total_entries"] == 2
+
+
+# ============================================================================
+# 4. PENAMPIL DOKUMEN ADMIN MENGIKUTI MATRIKS RBAC
+# ============================================================================
+class TestDocumentViewerRBAC:
+    """Hak 'kelola dokumen' tidak memberi hak membaca isi dokumen di luar klasifikasi peran."""
+
+    @staticmethod
+    def _setup(classification):
+        from backend.app.models import Document
+
+        doc = Document(id=uuid.uuid4(), filename="Rencana Akuisisi Proyek X.pdf", file_type="pdf",
+                       file_size_bytes=1, classification=classification, status="Terindeks")
+        session = AsyncMock()
+        res = MagicMock()
+        res.scalar_one_or_none.return_value = doc
+        session.execute.return_value = res
+        user = MagicMock(role_name="Admin", full_name="Admin Sistem", username="admin_sistem", db_id=None)
+        request = MagicMock()
+        request.client.host = "127.0.0.1"
+        return doc, session, user, request
+
+    @pytest.mark.asyncio
+    async def test_admin_cannot_view_confidential_document(self):
+        from fastapi import HTTPException
+        from backend.app.routers.admin import _get_viewable_document
+
+        doc, session, user, request = self._setup("Confidential")
+        audit = AsyncMock()
+        with patch("backend.app.routers.admin.get_user_allowed_classifications",
+                   new=AsyncMock(return_value=["Public"])), \
+             patch("backend.app.routers.admin.record_audit_log", new=audit):
+            with pytest.raises(HTTPException) as exc:
+                await _get_viewable_document(doc.id, request, session, user)
+
+        assert exc.value.status_code == 403
+        assert audit.call_args.kwargs["action"] == "DOC_VIEW"
+        assert audit.call_args.kwargs["status"] == "Ditolak RBAC"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_view_public_document_and_it_is_logged(self):
+        from backend.app.routers.admin import _get_viewable_document
+
+        doc, session, user, request = self._setup("Public")
+        audit = AsyncMock()
+        with patch("backend.app.routers.admin.get_user_allowed_classifications",
+                   new=AsyncMock(return_value=["Public"])), \
+             patch("backend.app.routers.admin.record_audit_log", new=audit):
+            result = await _get_viewable_document(doc.id, request, session, user)
+
+        assert result is doc
+        assert audit.call_args.kwargs["action"] == "DOC_VIEW"
+        assert audit.call_args.kwargs["status"] == "Berhasil"

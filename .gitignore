@@ -39,3 +39,6 @@ yarn-error.log
 
 # Docker
 *.log
+
+# File dokumen yang diunggah (bisa berklasifikasi rahasia)
+data/documents/

@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Database,
   Edit2,
+  Eye,
   FileText,
   Search,
   Trash2,
@@ -12,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api/client";
+import { DocumentViewerModal } from "../../components/DocumentViewerModal";
 
 interface DocumentItem {
   id: string;
@@ -63,6 +65,7 @@ export const AdminDocumentsPage: React.FC = () => {
   const [isReindexing, setIsReindexing] = useState(false);
 
   // Edit classification modal state
+  const [viewingDoc, setViewingDoc] = useState<DocumentItem | null>(null);
   const [editingDoc, setEditingDoc] = useState<DocumentItem | null>(null);
   const [newClass, setNewClass] = useState<"Public" | "HR" | "Finance" | "Confidential">("Public");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -127,6 +130,8 @@ export const AdminDocumentsPage: React.FC = () => {
       setIsReindexing(false);
     }
   };
+
+  const closeViewer = React.useCallback(() => setViewingDoc(null), []);
 
   const handleDelete = async (doc: DocumentItem) => {
     if (!confirm(`Hapus dokumen "${doc.filename}"? Seluruh chunk vektor juga akan dihapus.`)) return;
@@ -426,6 +431,13 @@ export const AdminDocumentsPage: React.FC = () => {
                     <td className="py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
+                          onClick={() => setViewingDoc(doc)}
+                          title="Lihat Dokumen"
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        <button
                           onClick={() => {
                             setEditingDoc(doc);
                             setNewClass(doc.classification);
@@ -476,6 +488,15 @@ export const AdminDocumentsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Modal Penampil Dokumen */}
+      {viewingDoc && (
+        <DocumentViewerModal
+          doc={viewingDoc}
+          badgeClass={getClassificationBadge(viewingDoc.classification)}
+          onClose={closeViewer}
+        />
+      )}
 
       {/* Modal Ubah Klasifikasi Dokumen */}
       {editingDoc && (

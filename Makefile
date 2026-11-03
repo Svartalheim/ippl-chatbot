@@ -1,4 +1,4 @@
-.PHONY: init up down logs reset token test-auth test-quick test test-security test-perf seed
+.PHONY: init up down logs reset token test-auth test-quick test test-security test-db test-perf reembed calibrate seed
 
 PYTEST ?= $(shell if [ -f .venv/bin/pytest ]; then echo ".venv/bin/pytest"; else which pytest 2>/dev/null || echo "pytest"; fi)
 PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo ".venv/bin/python3"; else which python3 2>/dev/null || echo "python3"; fi)
@@ -52,12 +52,25 @@ test:
 # Aktivitas 4b: Uji Keamanan Otomatis (Kebocoran RBAC, Prompt Injection, Imutabilitas Audit Log)
 test-security:
 	@echo "Menjalankan Uji Keamanan Otomatis (Aktivitas 4b)..."
-	PYTHONPATH=. $(PYTEST) backend/tests/test_4b_security.py -v
+	PYTHONPATH=. $(PYTEST) backend/tests/test_4b_security.py backend/tests/test_4b_db_integration.py -v
+
+# Aktivitas 4b (integrasi): imutabilitas audit_logs & rantai hash terhadap PostgreSQL asli (butuh 'make up')
+test-db:
+	@echo "Menjalankan uji integrasi database audit_logs (butuh stack Docker berjalan)..."
+	PYTHONPATH=. $(PYTEST) backend/tests/test_4b_db_integration.py -v
 
 # Aktivitas 4c: Uji Kinerja & Beban 500 Pengguna Konkuren (Target p95 < 5 detik)
 test-perf:
 	@echo "Menjalankan Uji Kinerja & Beban 500 Pengguna Aktif (Aktivitas 4c)..."
-	PYTHONPATH=. $(PYTHON) scripts/load_test_4c.py --concurrency 500 --requests 500
+	PYTHONPATH=. $(PYTHON) scripts/load_test_4c.py --concurrency $(or $(CONCURRENCY),500) --requests $(or $(REQUESTS),500)
+
+# Embed ulang chunk yang masih memakai vektor mock (mis. seed sebelum model embedding selesai di-pull)
+reembed:
+	$(DOCKER_COMPOSE) exec backend python -m app.reembed
+
+# Tampilkan skor relevansi pertanyaan berlabel untuk memilih RAG_SIMILARITY_THRESHOLD
+calibrate:
+	$(DOCKER_COMPOSE) exec backend python -m app.calibrate_rag
 
 # Seeding awal basis data (Peran, Akun Prototipe, Dokumen 4 Klasifikasi, Genesis Audit Log)
 seed:

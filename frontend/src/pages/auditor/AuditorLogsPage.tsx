@@ -131,6 +131,7 @@ export const AuditorLogsPage: React.FC = () => {
       case "PROMPT_INJECTION":
         return "bg-red-100 text-red-900 font-extrabold";
       case "DOC_UPLOAD":
+      case "DOC_VIEW":
         return "bg-blue-100 text-blue-900 font-semibold";
       case "ROLE_UPDATE":
         return "bg-purple-100 text-purple-900 font-semibold";
@@ -258,6 +259,7 @@ export const AuditorLogsPage: React.FC = () => {
                 <option value="QUERY_DENIED">QUERY_DENIED</option>
                 <option value="PROMPT_INJECTION">PROMPT_INJECTION</option>
                 <option value="DOC_UPLOAD">DOC_UPLOAD</option>
+                <option value="DOC_VIEW">DOC_VIEW</option>
                 <option value="ROLE_UPDATE">ROLE_UPDATE</option>
                 <option value="LOGIN">LOGIN</option>
                 <option value="FEEDBACK">FEEDBACK</option>

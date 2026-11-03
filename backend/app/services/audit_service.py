@@ -7,10 +7,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AuditLog
+
+# Kunci advisory PostgreSQL untuk menserialkan penulisan audit_logs.
+# Tanpa kunci ini, dua request bersamaan dapat membaca curr_hash terakhir yang sama
+# sehingga rantai hash bercabang dan verify_audit_chain melaporkan kerusakan palsu.
+AUDIT_CHAIN_LOCK_KEY = 7_771_001
 
 
 async def record_audit_log(
@@ -29,6 +34,11 @@ async def record_audit_log(
 
     curr_hash = sha256(f"{prev_hash}|{timestamp_iso}|{actor_name}|{actor_role}|{action}|{detail}|{status}")
     """
+    # 0. Kunci rantai hash sampai transaksi ini selesai (commit/rollback melepaskan kunci)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": AUDIT_CHAIN_LOCK_KEY}
+    )
+
     # 1. Ambil hash terakhir dari entri sebelumnya (atau 'GENESIS' jika masih kosong)
     stmt = select(AuditLog.curr_hash).order_by(AuditLog.id.desc()).limit(1)
     res = await session.execute(stmt)

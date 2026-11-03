@@ -11,7 +11,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from sqlalchemy import text
@@ -62,8 +62,8 @@ async def execute_rag_query(
     allowed_classifications: List[str],
     user_id: Optional[uuid.UUID] = None,
     ip_address: Optional[str] = None,
-    top_k: int = 4,
-    similarity_threshold: float = 0.35,
+    top_k: Optional[int] = None,
+    similarity_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Pipeline lengkap eksekusi kueri RAG:
@@ -73,6 +73,9 @@ async def execute_rag_query(
     4. Generasi Jawaban Bersitasi Ollama
     """
     start_time = time.time()
+    top_k = top_k or settings.rag_top_k
+    if similarity_threshold is None:
+        similarity_threshold = settings.rag_similarity_threshold
 
     # ========================================================
     # Tahap 1: Sanitasi Input & Deteksi Prompt Injection
@@ -106,13 +109,32 @@ async def execute_rag_query(
         }
 
     # ========================================================
+    # Tahap 1b: Pertanyaan tentang sistem ("dokumen apa yang bisa saya akses?")
+    # dijawab langsung dari database, bukan lewat RAG.
+    # ========================================================
+    if is_small_talk(query):
+        return await _canned_result(
+            session, start_time, user_name, user_role, user_id, ip_address, query,
+            answer=_small_talk_answer(query, user_name, allowed_classifications),
+            detail_suffix="sapaan",
+        )
+
+    if is_document_list_question(query):
+        return await _document_list_result(
+            session, start_time, user_name, user_role, allowed_classifications, user_id, ip_address, query
+        )
+
+    # ========================================================
     # Tahap 2: Embedding Kueri & Similarity Search RBAC
     # ========================================================
     try:
-        query_vec = await create_embedding(query)
+        query_vec = await create_embedding(query, kind="query")
     except Exception as e:
         logger.error(f"Gagal membuat embedding kueri: {e}")
-        query_vec = [0.0] * 768
+        return await _error_result(
+            session, start_time, user_name, user_role, user_id, ip_address, query,
+            reason=f"embedding gagal: {e}",
+        )
 
     query_vec_str = "[" + ",".join(str(round(x, 6)) for x in query_vec) + "]"
 
@@ -226,97 +248,80 @@ async def execute_rag_query(
         }
 
     # ========================================================
-    # Tahap 4: Generasi Jawaban Bersitasi via Ollama (Llama 3)
+    # Tahap 4: Pilih konteks yang benar-benar relevan
     # ========================================================
+    # Absolut: skor >= ambang. Relatif: tidak jauh di bawah skor terbaik, agar chunk
+    # "kebetulan mirip" tidak ikut menjadi sumber.
     relevant_chunks = [
-        row for row in allowed_rows if row["score"] is not None and float(row["score"]) >= similarity_threshold
+        row for row in allowed_rows
+        if row["score"] is not None
+        and float(row["score"]) >= similarity_threshold
+        and float(row["score"]) >= best_allowed_score - settings.rag_relative_margin
     ]
 
-    # Format array sitasi
-    citations: List[Dict[str, Any]] = []
-    context_blocks: List[str] = []
+    if not relevant_chunks:
+        logger.warning(
+            "RAG tidak ditemukan (retrieval): kueri=%r ambang=%.2f skor_teratas=%s",
+            query[:80], similarity_threshold,
+            [(r["filename"], round(float(r["score"] or 0), 3)) for r in allowed_rows],
+        )
+        return await _no_answer_result(
+            session, start_time, user_name, user_role, user_id, ip_address, query
+        )
 
+    context_blocks: List[str] = []
     for idx, row in enumerate(relevant_chunks, start=1):
-        score_val = round(float(row["score"]), 2)
-        citations.append({
-            "index": idx,
-            "document_id": str(row["document_id"]),
-            "filename": row["filename"],
-            "section_title": row["section_title"],
-            "page_number": row["page_number"],
-            "classification": row["classification"],
-            "relevance_score": score_val,
-        })
         context_blocks.append(
             f"[{idx}] Sumber: {row['filename']} (Hal. {row['page_number']}, {row['section_title']}):\n{row['content']}"
         )
-
-    # Bila tidak ada konteks relevan
-    if not relevant_chunks:
-        latency_ms = int((time.time() - start_time) * 1000)
-        await record_audit_log(
-            session=session,
-            actor_name=user_name,
-            actor_role=user_role,
-            action="QUERY",
-            detail=f'"{query[:40]}..." · 0 sumber',
-            status="Berhasil",
-            actor_user_id=user_id,
-            ip_address=ip_address,
-        )
-        return {
-            "status": "SUCCESS",
-            "answer": "Maaf, tidak ditemukan informasi yang relevan pada dokumen yang diizinkan untuk peran Anda.",
-            "citations": [],
-            "blocked_classification": None,
-            "latency_ms": latency_ms,
-        }
-
     context_str = "\n\n".join(context_blocks)
 
+    # ========================================================
+    # Tahap 5: Generasi Jawaban Bersitasi via Ollama
+    # ========================================================
     system_prompt = (
-        "Anda adalah asisten AI resmi perusahaan yang cerdas dan aman.\n"
-        "Tugas Anda adalah menjawab pertanyaan pengguna secara akurat HANYA berdasarkan konteks dokumen yang diberikan.\n"
-        "Aturan wajib:\n"
-        "1. Jawab HANYA menggunakan fakta yang tertulis pada konteks dokumen.\n"
-        "2. Wajib menyertakan nomor sitasi inline dalam format [1], [2], dst. pada akhir kalimat fakta yang merujuk dokumen terkait.\n"
-        "3. Jangan mengarang informasi di luar konteks dokumen.\n"
-        "4. Gunakan bahasa Indonesia yang baku, profesional, dan padat."
+        "Anda adalah asisten AI internal perusahaan yang menjawab berdasarkan dokumen.\n"
+        "Aturan:\n"
+        "1. Jawab menggunakan informasi dari konteks dokumen di bawah. Jangan menambah fakta yang tidak ada di konteks.\n"
+        "2. Jika pengguna menanyakan isi, ringkasan, atau penjelasan sebuah dokumen, rangkum informasi dokumen itu dari konteks.\n"
+        "3. Jika konteks hanya menjawab sebagian, jawab bagian yang ada dan sebutkan bagian yang tidak tersedia.\n"
+        "4. Hanya jika TIDAK ADA satu pun bagian konteks yang berkaitan dengan pertanyaan, balas persis: "
+        f"\"{NOT_FOUND_ANSWER}\"\n"
+        "5. Akhiri setiap kalimat fakta dengan nomor sumbernya, misalnya [1] atau [2]. "
+        "Kutip hanya nomor sumber yang benar-benar Anda gunakan.\n"
+        "6. Jawab dalam bahasa Indonesia yang baku dan ringkas."
     )
-
     user_prompt = f"Konteks Dokumen Internal:\n{context_str}\n\nPertanyaan Pengguna: {query}"
 
-    answer_text = ""
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                f"{settings.ollama_url}/api/chat",
-                json={
-                    "model": settings.ollama_model,
-                    "stream": False,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "options": {
-                        "temperature": 0.1,
-                    },
-                },
-            )
-            if resp.status_code == 200:
-                answer_text = resp.json().get("message", {}).get("content", "").strip()
+        answer_text = await _ollama_chat(system_prompt, user_prompt)
     except Exception as e:
-        logger.warning(f"Ollama chat gagal atau tidak tersedia: {e}")
+        logger.error(f"Generasi jawaban Ollama gagal: {e}")
+        return await _error_result(
+            session, start_time, user_name, user_role, user_id, ip_address, query,
+            reason=f"LLM gagal: {e}",
+        )
 
-    # Fallback jawaban jika LLM belum siap / mock mode aktif
-    if not answer_text:
-        # Sintesis jawaban deterministik dari chunk relevan pertama
-        top_c = relevant_chunks[0]
-        answer_text = f"{top_c['content']} [1]"
+    if _is_not_found(answer_text):
+        logger.warning(
+            "RAG tidak ditemukan (LLM menolak): kueri=%r sumber=%s jawaban_llm=%r",
+            query[:80],
+            [(r["filename"], round(float(r["score"]), 3)) for r in relevant_chunks],
+            answer_text[:200],
+        )
+        return await _no_answer_result(
+            session, start_time, user_name, user_role, user_id, ip_address, query
+        )
+
+    # Hanya sumber yang benar-benar dikutip di jawaban yang ditampilkan, lalu nomor
+    # sitasi diurutkan ulang (mis. jawaban hanya mengutip [3] -> menjadi [1]).
+    answer_text, citations = _renumber_citations(answer_text, relevant_chunks)
+    if not citations:
+        # LLM menjawab tanpa sitasi: tampilkan sumber terbaik saja agar tetap dapat dilacak.
+        top = relevant_chunks[0]
+        citations = [_citation(1, top)]
 
     latency_ms = int((time.time() - start_time) * 1000)
-
-    # Catat audit log QUERY berhasil
     await record_audit_log(
         session=session,
         actor_name=user_name,
@@ -335,3 +340,225 @@ async def execute_rag_query(
         "blocked_classification": None,
         "latency_ms": latency_ms,
     }
+
+
+# ============================================================
+# Helper
+# ============================================================
+NOT_FOUND_ANSWER = "Informasi tersebut tidak ditemukan dalam dokumen yang dapat Anda akses."
+_CITATION_RE = re.compile(r"\[(\d+)\]")
+
+
+def _is_not_found(answer: str) -> bool:
+    normalized = answer.strip().strip('"').lower()
+    return not normalized or normalized.startswith(NOT_FOUND_ANSWER[:40].lower())
+
+
+def _citation(index: int, row: Any) -> Dict[str, Any]:
+    return {
+        "index": index,
+        "document_id": str(row["document_id"]),
+        "filename": row["filename"],
+        "section_title": row["section_title"],
+        "page_number": row["page_number"],
+        "classification": row["classification"],
+        "relevance_score": round(float(row["score"]), 2),
+    }
+
+
+def _renumber_citations(answer: str, rows: List[Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    """Pertahankan hanya sitasi yang dikutip & valid, beri nomor ulang 1..n sesuai urutan muncul."""
+    mapping: Dict[int, int] = {}
+    for m in _CITATION_RE.finditer(answer):
+        old = int(m.group(1))
+        if 1 <= old <= len(rows) and old not in mapping:
+            mapping[old] = len(mapping) + 1
+
+    def repl(m: "re.Match[str]") -> str:
+        old = int(m.group(1))
+        return f"[{mapping[old]}]" if old in mapping else ""  # buang nomor sitasi fiktif
+
+    new_answer = _CITATION_RE.sub(repl, answer).strip()
+    citations = [_citation(new, rows[old - 1]) for old, new in sorted(mapping.items(), key=lambda kv: kv[1])]
+    return new_answer, citations
+
+
+async def _ollama_chat(system_prompt: str, user_prompt: str) -> str:
+    async with httpx.AsyncClient(timeout=settings.ollama_chat_timeout) as client:
+        resp = await client.post(
+            f"{settings.ollama_url}/api/chat",
+            json={
+                "model": settings.ollama_model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "options": {"temperature": 0.1},
+            },
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} dari Ollama: {resp.text[:200]}")
+    content = resp.json().get("message", {}).get("content", "").strip()
+    if not content:
+        raise RuntimeError("Ollama mengembalikan jawaban kosong")
+    return content
+
+
+async def _no_answer_result(session, start_time, user_name, user_role, user_id, ip_address, query):
+    latency_ms = int((time.time() - start_time) * 1000)
+    await record_audit_log(
+        session=session,
+        actor_name=user_name,
+        actor_role=user_role,
+        action="QUERY",
+        detail=f'"{query[:40]}..." · 0 sumber',
+        status="Berhasil",
+        actor_user_id=user_id,
+        ip_address=ip_address,
+    )
+    return {
+        "status": "SUCCESS",
+        "answer": NOT_FOUND_ANSWER,
+        "citations": [],
+        "blocked_classification": None,
+        "latency_ms": latency_ms,
+    }
+
+
+async def _error_result(session, start_time, user_name, user_role, user_id, ip_address, query, reason):
+    latency_ms = int((time.time() - start_time) * 1000)
+    await record_audit_log(
+        session=session,
+        actor_name=user_name,
+        actor_role=user_role,
+        action="QUERY",
+        detail=f'"{query[:40]}..." · gagal ({reason[:80]})',
+        status="Gagal",
+        actor_user_id=user_id,
+        ip_address=ip_address,
+    )
+    return {
+        "status": "ERROR",
+        "answer": "Maaf, layanan AI sedang tidak tersedia. Silakan coba lagi beberapa saat lagi.",
+        "citations": [],
+        "blocked_classification": None,
+        "latency_ms": latency_ms,
+    }
+
+
+_DOC_LIST_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bdokumen\s+apa\s+(saja\s+)?(yang\s+)?(bisa|dapat|boleh)",
+        r"\bdaftar\s+(semua\s+)?dokumen\b",
+        r"\b(apa|mana)\s+saja\s+dokumen\b",
+        r"\bdokumen\s+(yang\s+)?(bisa|dapat|boleh)\s+(saya|aku|kami|gue|gw)\s+(akses|lihat|baca)",
+        r"\b(akses|hak\s+akses)\s+(saya|aku)\s+(ke\s+)?dokumen",
+        r"\bwhat\s+documents\s+can\s+i\b",
+    ]
+]
+
+
+def is_document_list_question(query: str) -> bool:
+    return any(p.search(query) for p in _DOC_LIST_PATTERNS)
+
+
+async def _document_list_result(
+    session, start_time, user_name, user_role, allowed_classifications, user_id, ip_address, query
+):
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT filename, classification
+                FROM documents
+                WHERE classification = ANY(:allowed) AND status = 'Terindeks'
+                ORDER BY classification, filename
+                """
+            ),
+            {"allowed": list(allowed_classifications)},
+        )
+    ).mappings().all()
+
+    if not allowed_classifications:
+        answer = f"Peran {user_role} tidak memiliki akses ke dokumen apa pun di chatbot ini."
+    elif not rows:
+        answer = (
+            f"Peran {user_role} dapat mengakses dokumen berklasifikasi "
+            f"{', '.join(allowed_classifications)}, tetapi belum ada dokumen terindeks."
+        )
+    else:
+        lines = [f"- {r['filename']} ({r['classification']})" for r in rows]
+        answer = (
+            f"Sebagai {user_role}, Anda dapat mengakses {len(rows)} dokumen "
+            f"(klasifikasi: {', '.join(allowed_classifications)}):\n" + "\n".join(lines)
+        )
+
+    latency_ms = int((time.time() - start_time) * 1000)
+    await record_audit_log(
+        session=session,
+        actor_name=user_name,
+        actor_role=user_role,
+        action="QUERY",
+        detail=f'"{query[:40]}..." · daftar {len(rows)} dokumen',
+        status="Berhasil",
+        actor_user_id=user_id,
+        ip_address=ip_address,
+    )
+    return {
+        "status": "SUCCESS",
+        "answer": answer,
+        "citations": [],
+        "blocked_classification": None,
+        "latency_ms": latency_ms,
+    }
+
+
+_SMALL_TALK_RE = re.compile(
+    r"^\s*(halo+|hal+o|hai+|hi+|hello|hey|hei|pagi|siang|sore|malam|"
+    r"selamat\s+(pagi|siang|sore|malam)|assalamu.?alaikum|"
+    r"terima\s*kasih|makasih|thanks?(\s+you)?|thx|ok(e|ay)?|sip|mantap)"
+    r"(\s+(ya|yah|banyak|kak|bot|semua|min))*\s*[!.?,]*\s*$",
+    re.IGNORECASE,
+)
+_THANKS_RE = re.compile(r"terima\s*kasih|makasih|thank|thx", re.IGNORECASE)
+
+
+def is_small_talk(query: str) -> bool:
+    """Sapaan / ucapan terima kasih singkat yang tidak perlu dicari di dokumen."""
+    return len(query) <= 40 and bool(_SMALL_TALK_RE.match(query))
+
+
+def _small_talk_answer(query: str, user_name: str, allowed_classifications: List[str]) -> str:
+    first_name = (user_name or "").split(" ")[0] or "Anda"
+    if _THANKS_RE.search(query):
+        return f"Sama-sama, {first_name}! Silakan tanyakan lagi bila ada yang perlu dicari di dokumen internal."
+    scope = ", ".join(allowed_classifications) if allowed_classifications else "tidak ada"
+    return (
+        f"Halo, {first_name}! Saya asisten dokumen internal perusahaan. "
+        f"Tanyakan apa saja tentang dokumen yang dapat Anda akses (klasifikasi: {scope}), "
+        "misalnya \"Berapa hari hak cuti tahunan?\" atau \"Dokumen apa saja yang bisa saya akses?\""
+    )
+
+
+async def _canned_result(session, start_time, user_name, user_role, user_id, ip_address, query, answer, detail_suffix):
+    latency_ms = int((time.time() - start_time) * 1000)
+    await record_audit_log(
+        session=session,
+        actor_name=user_name,
+        actor_role=user_role,
+        action="QUERY",
+        detail=f'"{query[:40]}..." · {detail_suffix}',
+        status="Berhasil",
+        actor_user_id=user_id,
+        ip_address=ip_address,
+    )
+    return {
+        "status": "SUCCESS",
+        "answer": answer,
+        "citations": [],
+        "blocked_classification": None,
+        "latency_ms": latency_ms,
+    }
+

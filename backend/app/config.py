@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
     allow_mock_embedding: bool = False
 
+    # RAG retrieval — kalibrasi dengan: docker compose exec backend python -m app.calibrate_rag
+    rag_top_k: int = 4
+    rag_similarity_threshold: float = 0.55   # skor kosinus minimum agar chunk dianggap relevan
+    rag_relative_margin: float = 0.08        # buang chunk yang jauh di bawah skor terbaik
+    ollama_chat_timeout: float = 90.0
+
     keycloak_internal_url: str = "http://keycloak:8080"  # untuk ambil JWKS (antar-container)
     keycloak_public_url: str = "http://localhost:8080"   # nilai `iss` di token
     keycloak_realm: str = "dev"

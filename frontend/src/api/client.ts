@@ -151,6 +151,34 @@ export async function apiFetch<T = any>(
   return response.json();
 }
 
+/**
+ * Ambil respons biner (mis. file PDF) dengan header Authorization.
+ * <iframe src> tidak bisa mengirim Bearer token, jadi file diambil sebagai Blob
+ * lalu ditampilkan lewat URL.createObjectURL().
+ */
+export async function apiFetchBlob(endpoint: string): Promise<Blob> {
+  const url = `${BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  const doFetch = () =>
+    fetch(url, { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } });
+
+  let response = await doFetch();
+  if (response.status === 401) {
+    // Picu alur refresh token milik apiFetch, lalu ulangi sekali
+    await apiFetch("/me");
+    response = await doFetch();
+  }
+  if (!response.ok) {
+    let detail = "Gagal memuat file";
+    try {
+      detail = (await response.json()).detail || detail;
+    } catch {
+      /* bukan JSON */
+    }
+    throw new Error(detail);
+  }
+  return response.blob();
+}
+
 export const api = {
   get: <T = any>(endpoint: string, headers?: HeadersInit) =>
     apiFetch<T>(endpoint, { method: "GET", headers }),

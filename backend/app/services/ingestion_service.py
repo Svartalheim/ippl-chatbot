@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..models import Document, DocumentChunk
@@ -70,16 +71,39 @@ def deterministic_mock_embedding(text: str, dim: int = 768) -> List[float]:
     return [round(x / norm, 6) for x in vec]
 
 
-async def create_embedding(text: str) -> List[float]:
-    """
-    Membuat embedding 768-dimensi menggunakan Ollama API.
-    Sediakan fallback deterministik hanya bila ALLOW_MOCK_EMBEDDING=true.
-    """
-    if getattr(settings, "allow_mock_embedding", False):
-        return deterministic_mock_embedding(text, dim=768)
+def _uses_task_prefix() -> bool:
+    """nomic-embed-text dilatih dengan prefiks tugas; tanpa prefiks skor kemiripan menumpuk."""
+    return "nomic" in settings.ollama_embed_model.lower()
 
+
+def embedding_version() -> str:
+    """Label versi embedding. Mengubahnya memicu embed ulang otomatis saat startup."""
+    suffix = ":prefixed" if _uses_task_prefix() else ""
+    return f"ollama:{settings.ollama_embed_model}{suffix}:titled"
+
+
+def document_embedding_text(filename: Optional[str], section_title: Optional[str], content: str) -> str:
+    """
+    Teks yang di-embed untuk sebuah chunk: nama dokumen + judul bagian + isi.
+    Judul sering memuat kata kunci yang tidak muncul di isi (mis. 'Orientasi Karyawan Baru'),
+    sehingga menyertakannya membuat pertanyaan seperti itu menemukan dokumen yang benar.
+    Kolom `content` di database tetap hanya isi chunk.
+    """
+    title = Path(filename).stem if filename else ""
+    header = " — ".join(x for x in (title, section_title) if x)
+    return f"{header}\n{content}" if header else content
+
+
+async def ollama_embedding(text: str, timeout: float = 10.0, kind: str = "document") -> List[float]:
+    """
+    Membuat embedding 768-dimensi via Ollama TANPA fallback.
+    kind: 'document' untuk chunk yang disimpan, 'query' untuk pertanyaan pengguna.
+    Melempar RuntimeError bila Ollama/model embedding belum siap.
+    """
+    if _uses_task_prefix():
+        text = ("search_query: " if kind == "query" else "search_document: ") + text
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             res = await client.post(
                 f"{settings.ollama_url}/api/embeddings",
                 json={
@@ -87,21 +111,32 @@ async def create_embedding(text: str) -> List[float]:
                     "prompt": text,
                 },
             )
-            if res.status_code == 200:
-                data = res.json()
-                emb = data.get("embedding")
-                if emb and len(emb) == 768:
-                    return emb
     except Exception as e:
-        logger.warning(f"Ollama API gagal dihubungi ({e}).")
-        if getattr(settings, "allow_mock_embedding", False):
-            logger.info("Menggunakan fallback embedding deterministik.")
-            return deterministic_mock_embedding(text, dim=768)
-        raise RuntimeError(f"Gagal menghasilkan embedding via Ollama: {str(e)}")
+        raise RuntimeError(f"Gagal menghubungi Ollama untuk embedding: {e}") from e
 
+    if res.status_code != 200:
+        raise RuntimeError(
+            f"Ollama embedding gagal (HTTP {res.status_code}): {res.text[:200]}"
+        )
+    emb = res.json().get("embedding")
+    if not emb or len(emb) != 768:
+        raise RuntimeError("Ollama tidak mengembalikan vektor embedding 768 dimensi.")
+    return emb
+
+
+def current_embedding_source() -> str:
+    """Label sumber embedding yang disimpan di metadata_json chunk."""
+    return "mock" if getattr(settings, "allow_mock_embedding", False) else embedding_version()
+
+
+async def create_embedding(text: str, kind: str = "document") -> List[float]:
+    """
+    Membuat embedding 768-dimensi menggunakan Ollama API.
+    Sediakan fallback deterministik hanya bila ALLOW_MOCK_EMBEDDING=true.
+    """
     if getattr(settings, "allow_mock_embedding", False):
         return deterministic_mock_embedding(text, dim=768)
-    raise RuntimeError("Ollama tidak mengembalikan vektor embedding 768 dimensi.")
+    return await ollama_embedding(text, kind=kind)
 
 
 def extract_pdf_pages(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
@@ -322,7 +357,9 @@ async def process_document_file(
         # 3. Generate embedding dan simpan ke document_chunks
         chunk_instances: List[DocumentChunk] = []
         for c in chunks_data:
-            emb = await create_embedding(c["content"])
+            emb = await create_embedding(
+                document_embedding_text(document.filename, c.get("section_title"), c["content"])
+            )
             chunk_obj = DocumentChunk(
                 id=uuid.uuid4(),
                 document_id=document.id,
@@ -339,6 +376,7 @@ async def process_document_file(
                     "page_number": c.get("page_number"),
                     "section_title": c.get("section_title"),
                     "chunk_index": c["chunk_index"],
+                    "embedding_source": current_embedding_source(),
                 },
             )
             session.add(chunk_obj)
@@ -437,7 +475,9 @@ async def reindex_all_documents(session: AsyncSession) -> Dict[str, Any]:
                 chunks = res_chunks.scalars().all()
 
                 for chunk in chunks:
-                    emb = await create_embedding(chunk.content)
+                    emb = await create_embedding(
+                        document_embedding_text(doc.filename, chunk.section_title, chunk.content)
+                    )
                     chunk.embedding = emb
                     chunk.classification = doc.classification
                     chunk.metadata_json = {
@@ -447,6 +487,7 @@ async def reindex_all_documents(session: AsyncSession) -> Dict[str, Any]:
                         "page_number": chunk.page_number,
                         "section_title": chunk.section_title,
                         "chunk_index": chunk.chunk_index,
+                        "embedding_source": current_embedding_source(),
                     }
 
                 doc.status = "Terindeks"
@@ -468,3 +509,65 @@ async def reindex_all_documents(session: AsyncSession) -> Dict[str, Any]:
         "errors": errors,
         "checked_at": datetime.now(timezone.utc),
     }
+
+
+async def reembed_stale_chunks(session: AsyncSession) -> int:
+    """
+    Meng-embed ulang chunk yang vektornya bukan versi embedding saat ini
+    (vektor mock, chunk seed lama tanpa label, atau versi tanpa prefiks).
+    Mengembalikan jumlah chunk yang diperbarui.
+    """
+    version = embedding_version()
+    stmt = select(DocumentChunk).where(
+        (DocumentChunk.embedding.is_(None))
+        | (DocumentChunk.metadata_json["embedding_source"].astext.is_distinct_from(version))
+    )
+    chunks = (await session.execute(stmt.options(selectinload(DocumentChunk.document)))).scalars().all()
+    for chunk in chunks:
+        chunk.embedding = await ollama_embedding(
+            document_embedding_text(chunk.document.filename, chunk.section_title, chunk.content),
+            kind="document",
+        )
+        chunk.metadata_json = {**(chunk.metadata_json or {}), "embedding_source": version}
+    if chunks:
+        await session.commit()
+    return len(chunks)
+
+
+async def reembed_when_model_ready(
+    session_factory: Any,
+    poll_seconds: float = 15.0,
+    max_wait_seconds: float = 1800.0,
+) -> None:
+    """
+    Tugas latar belakang saat startup: tunggu model embedding Ollama siap
+    (biasanya masih di-pull oleh service ollama-pull), lalu embed ulang
+    chunk yang masih memakai vektor mock agar retrieval & deteksi RBAC akurat.
+    """
+    if getattr(settings, "allow_mock_embedding", False):
+        return
+
+    waited = 0.0
+    while waited <= max_wait_seconds:
+        try:
+            await ollama_embedding("ping", timeout=5.0)
+            break
+        except Exception:
+            await asyncio.sleep(poll_seconds)
+            waited += poll_seconds
+    else:
+        logger.error(
+            "Model embedding Ollama belum siap setelah %.0f detik; chunk mock tidak di-embed ulang. "
+            "Jalankan 'Indeks ulang semua' di halaman Admin setelah model tersedia.",
+            max_wait_seconds,
+        )
+        return
+
+    try:
+        async with session_factory() as session:
+            count = await reembed_stale_chunks(session)
+        if count:
+            logger.info("Embedding ulang %d chunk mock dengan model %s selesai.", count, settings.ollama_embed_model)
+    except Exception as e:
+        logger.error(f"Gagal meng-embed ulang chunk mock: {e}")
+

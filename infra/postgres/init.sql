@@ -130,3 +130,18 @@ CREATE TRIGGER trg_prevent_audit_log_modification
 BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW
 EXECUTE FUNCTION prevent_audit_log_modification();
+
+-- Trigger untuk audit_logs (Mencegah TRUNCATE)
+CREATE OR REPLACE FUNCTION prevent_audit_log_truncate()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Operasi TRUNCATE pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_prevent_audit_log_truncate ON audit_logs;
+CREATE TRIGGER trg_prevent_audit_log_truncate
+BEFORE TRUNCATE ON audit_logs
+FOR EACH STATEMENT
+EXECUTE FUNCTION prevent_audit_log_truncate();

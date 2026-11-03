@@ -32,6 +32,8 @@ htmlcov/
 
 # Node.js (if adding frontend)
 node_modules/
+frontend/dist/
+dist/
 npm-debug.log
 yarn-error.log
 

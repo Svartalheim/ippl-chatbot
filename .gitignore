@@ -48,3 +48,4 @@ backups/
 data/audit_archive/
 infra/certs/*.crt
 infra/certs/*.key
+.docs

@@ -101,12 +101,15 @@ class TestAuthModule:
         assert await get_user_allowed_classifications(mock_session, "Karyawan") == ["Public"]
         assert await get_user_allowed_classifications(mock_session, "HR") == ["Public", "HR"]
         assert await get_user_allowed_classifications(mock_session, "Finance") == ["Public", "Finance"]
+        # Manajemen = CEO (SKPL 2.3): akses baca ke semua klasifikasi, termasuk Legal
         assert await get_user_allowed_classifications(mock_session, "Manajemen") == [
             "Public",
             "HR",
             "Finance",
+            "Legal",
             "Confidential",
         ]
+        assert await get_user_allowed_classifications(mock_session, "Legal") == ["Public", "Legal"]
         assert await get_user_allowed_classifications(mock_session, "Admin") == ["Public"]
         assert await get_user_allowed_classifications(mock_session, "Auditor") == []
 

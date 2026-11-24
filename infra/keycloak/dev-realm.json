@@ -28,6 +28,10 @@
       {
         "name": "Auditor",
         "description": "Peran Auditor - tinjau log audit (read-only)"
+      },
+      {
+        "name": "Legal",
+        "description": "Peran Penasihat Hukum - akses dokumen Public dan Legal"
       }
     ]
   },
@@ -176,6 +180,24 @@
       ],
       "realmRoles": [
         "Admin"
+      ]
+    },
+    {
+      "username": "hana",
+      "email": "hana.wijaya@perusahaan.co.id",
+      "firstName": "Hana",
+      "lastName": "Wijaya",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "Legal"
       ]
     }
   ]

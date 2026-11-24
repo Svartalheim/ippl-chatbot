@@ -1,0 +1,128 @@
+@startuml usecase
+' ==========================================================================
+' DOC-01 - Use Case Diagram (as-built) - Sistem Chatbot Cerdas & Aman
+' Pemetaan use case -> endpoint / halaman:
+'  UC-01 Login Aplikasi            : POST /auth/login, LoginPage.tsx
+'  UC-02 Verifikasi Autentikasi    : Keycloak token endpoint, decode_token, sync_user_to_db
+'  UC-03 Logout                    : POST /auth/logout, LogoutModal.tsx
+'  UC-04 Mengajukan Pertanyaan     : POST /chat/sessions/{id}/query, execute_rag_query
+'  UC-05 Validasi Token JWT        : auth.current_user (dipakai semua endpoint terproteksi)
+'  UC-06 Filter Akses RBAC         : WHERE classification = ANY(allowed_classifications)
+'  UC-07 Catat Log Audit           : audit_service.log_audit
+'  UC-08 Lihat Sitasi & Dokumen    : GET /chat/documents/{id}/preview, /file (DocumentViewerModal)
+'  UC-09 Beri Feedback Jawaban     : POST /chat/messages/{id}/feedback
+'  UC-10 Kelola Riwayat Percakapan : GET/POST/DELETE /chat/sessions, GET /chat/sessions/{id}/messages
+'  UC-11 Kelola Peran & Izin       : GET/POST/PUT /admin/roles
+'  UC-11a Ubah Peran Pengguna      : PUT /admin/users/{id}/role
+'  UC-12 Kelola Dokumen            : GET /admin/documents
+'  UC-12a..d                       : POST upload, DELETE, PATCH klasifikasi, POST reindex-all
+'  UC-13 Lihat Dasbor Kesehatan    : GET /admin/dashboard/health
+'  UC-14 Tinjau Log Audit          : GET /audit/logs
+'  UC-14a Verifikasi Rantai Hash   : GET /audit/verify
+'  UC-14b Ekspor Log CSV           : GET /audit/export-csv
+'  UC-15 Akhiri Sesi Pengguna      : POST /admin/users/{id}/terminate-sessions
+' ==========================================================================
+left to right direction
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+
+actor "Pengguna" as Pengguna <<abstract>>
+actor "Karyawan" as Karyawan
+actor "Spesialis SDM (HR)" as HR
+actor "Analis Keuangan" as Finance
+actor "Manajemen / CEO" as CEO
+actor "Penasihat Hukum (Legal)" as Legal
+actor "Administrator Sistem" as Admin
+actor "Auditor Kepatuhan" as Auditor
+
+Karyawan -|> Pengguna
+HR -|> Pengguna
+Finance -|> Pengguna
+CEO -|> Pengguna
+Legal -|> Pengguna
+
+actor "Keycloak (IdP)" as Keycloak <<system>>
+actor "Ollama (LLM & Embedding)" as Ollama <<system>>
+
+rectangle "Sistem Chatbot Cerdas & Aman" {
+  usecase "Login Aplikasi" as UC01
+  usecase "Verifikasi Autentikasi" as UC02
+  usecase "Logout" as UC03
+  usecase "Mengajukan Pertanyaan" as UC04
+  usecase "Validasi Token JWT" as UC05
+  usecase "Filter Akses RBAC" as UC06
+  usecase "Catat Log Audit" as UC07
+  usecase "Lihat Sitasi & Dokumen Sumber" as UC08
+  usecase "Beri Feedback Jawaban" as UC09
+  usecase "Kelola Riwayat Percakapan" as UC10
+
+  usecase "Kelola Peran & Izin" as UC11
+  usecase "Ubah Peran Pengguna" as UC11a
+  usecase "Akhiri Sesi Pengguna" as UC15
+  usecase "Kelola Dokumen" as UC12
+  usecase "Unggah Dokumen" as UC12a
+  usecase "Hapus Dokumen" as UC12b
+  usecase "Ubah Klasifikasi Dokumen" as UC12c
+  usecase "Indeks Ulang Dokumen" as UC12d
+  usecase "Lihat Dasbor Kesehatan Sistem" as UC13
+
+  usecase "Tinjau Log Audit" as UC14
+  usecase "Verifikasi Rantai Hash" as UC14a
+  usecase "Ekspor Log Audit (CSV)" as UC14b
+}
+
+' --- Autentikasi (semua aktor primer) ---
+Pengguna --> UC01
+Admin --> UC01
+Auditor --> UC01
+Pengguna --> UC03
+Admin --> UC03
+Auditor --> UC03
+UC01 ..> UC02 : <<include>>
+UC02 --> Keycloak
+
+' --- Pengguna (chat) ---
+Pengguna --> UC04
+Pengguna --> UC10
+UC04 ..> UC05 : <<include>>
+UC04 ..> UC06 : <<include>>
+UC04 ..> UC07 : <<include>>
+UC08 ..> UC04 : <<extend>>
+UC09 ..> UC04 : <<extend>>
+UC04 --> Ollama
+
+' --- Administrator Sistem ---
+Admin --> UC11
+Admin --> UC12
+Admin --> UC13
+UC11a ..> UC11 : <<extend>>
+UC15 ..> UC11 : <<extend>>
+UC12a ..> UC12 : <<extend>>
+UC12b ..> UC12 : <<extend>>
+UC12c ..> UC12 : <<extend>>
+UC12d ..> UC12 : <<extend>>
+UC12 ..> UC07 : <<include>>
+UC11 ..> UC07 : <<include>>
+UC12a --> Ollama
+
+' --- Auditor Kepatuhan ---
+Auditor --> UC14
+UC14a ..> UC14 : <<extend>>
+UC14b ..> UC14 : <<extend>>
+
+note right of UC05
+  Juga di-include oleh setiap use case
+  terproteksi (UC-04, UC-08..UC-15);
+  digambar sekali agar diagram tetap terbaca.
+end note
+
+note bottom of Admin
+  Pemisahan tugas (SKPL 2.3):
+  Admin tidak terhubung ke UC-08 dan
+  hanya dapat melihat dokumen Public.
+end note
+@enduml

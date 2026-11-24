@@ -1,4 +1,4 @@
-.PHONY: init up down logs reset token test-auth test-quick test test-security test-db test-perf reembed calibrate seed
+.PHONY: init up down logs reset token test-auth test-quick test test-security test-db test-perf test-all reembed calibrate seed certs up-prod down-prod backup restore audit-retention
 
 PYTEST ?= $(shell if [ -f .venv/bin/pytest ]; then echo ".venv/bin/pytest"; else which pytest 2>/dev/null || echo "pytest"; fi)
 PYTHON ?= $(shell if [ -f .venv/bin/python3 ]; then echo ".venv/bin/python3"; else which python3 2>/dev/null || echo "python3"; fi)
@@ -76,3 +76,33 @@ calibrate:
 seed:
 	@echo "Menjalankan seeding basis data..."
 	@PYTHONPATH=. $(PYTHON) -m backend.app.seed 2>/dev/null || docker compose exec backend python -m app.seed
+
+# Semua pengujian unit & keamanan (tanpa stack Docker)
+test-all:
+	PYTHONPATH=. $(PYTEST) backend/tests -m "not integration" -v
+
+# ===== Profil produksi (TLS 1.3, Postgres SSL, multi-worker, backup otomatis) =====
+PROD_COMPOSE = $(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.prod.yml
+
+# Sertifikat self-signed untuk uji; argumen opsional HOST=nama.domain
+certs:
+	./infra/certs/generate.sh $(or $(HOST),localhost)
+
+up-prod: init check-daemon certs
+	$(PROD_COMPOSE) up -d --build
+
+down-prod:
+	$(PROD_COMPOSE) down
+
+# Backup manual DB + dokumen ke ./backups (NFR-REL-002)
+backup:
+	./scripts/backup.sh
+
+# Pulihkan: make restore DUMP=backups/db_xxx.dump [DOCS=backups/documents_xxx.tar.gz]
+restore:
+	./scripts/restore.sh $(DUMP) $(DOCS)
+
+# Arsipkan & purge log audit melewati AUDIT_RETENTION_DAYS (NFR-SEC-018); DRY=1 untuk simulasi
+audit-retention:
+	$(DOCKER_COMPOSE) exec backend python -m app.audit_retention $(if $(DRY),--dry-run,)
+

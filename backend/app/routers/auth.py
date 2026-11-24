@@ -13,6 +13,7 @@ from ..auth import UserInfo, current_user, decode_token, optional_user, sync_use
 from ..config import settings
 from ..db import get_session
 from ..services.audit_service import record_audit_log
+from ..services.security_service import check_security_alert
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -80,6 +81,9 @@ async def login(
                     status="Gagal",
                     actor_user_id=None,
                     ip_address=client_ip,
+                )
+                await check_security_alert(
+                    session, req.username, "Unknown", "LOGIN_FAILED", None, client_ip
                 )
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -239,6 +243,8 @@ async def introspect_token(token: str):
     """
     Introspect token untuk melihat informasi detail (berguna untuk debugging).
     """
+    if not settings.enable_debug_endpoints:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     introspect_url = f"{settings.keycloak_internal_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/token/introspect"
 
     async with httpx.AsyncClient() as client:

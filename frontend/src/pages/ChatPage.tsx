@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
   Bot,
   ChevronRight,
+  Download,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -13,8 +14,10 @@ import {
   Shield,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
 } from "lucide-react";
 import { api } from "../api/client";
+import { DocumentViewerModal } from "../components/DocumentViewerModal";
 import { LogoutModal } from "../components/LogoutModal";
 import { useAuth } from "../context/AuthContext";
 
@@ -24,7 +27,7 @@ interface Citation {
   filename: string;
   section_title?: string;
   page_number?: number;
-  classification: "Public" | "HR" | "Finance" | "Confidential";
+  classification: "Public" | "HR" | "Finance" | "Legal" | "Confidential";
   relevance_score: number;
 }
 
@@ -61,8 +64,55 @@ export const ChatPage: React.FC = () => {
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  // Dokumen sumber sitasi yang sedang dibuka (FR-RESP-004 / NFR-USA-002)
+  const [viewerDoc, setViewerDoc] = useState<{
+    id: string;
+    filename: string;
+    classification: string;
+  } | null>(null);
+
+  // Hapus riwayat percakapan (hapusRiwayat) - log audit tidak ikut terhapus
+  const handleDeleteSession = async (sessionId: string) => {
+    if (!window.confirm("Hapus percakapan ini beserta seluruh pesannya?")) return;
+    try {
+      await api.delete(`/chat/sessions/${sessionId}`);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      console.error("Gagal menghapus percakapan:", err);
+    }
+  };
+
+  // Ekspor percakapan aktif ke Markdown (kebutuhan survei: simpan/ekspor riwayat chat)
+  const handleExportSession = () => {
+    if (!messages.length) return;
+    const title = sessions.find((s) => s.id === activeSessionId)?.title || "Percakapan";
+    const lines: string[] = [`# ${title}`, "", `Diekspor: ${new Date().toLocaleString("id-ID")}`, ""];
+    for (const m of messages) {
+      lines.push(`**${m.sender === "user" ? "Anda" : "Asisten"}** (${new Date(m.created_at).toLocaleString("id-ID")}):`);
+      lines.push("", m.content, "");
+      if (m.citations_json?.length) {
+        lines.push("Sumber:");
+        m.citations_json.forEach((c) =>
+          lines.push(`- [${c.index}] ${c.filename} (${c.classification}${c.page_number ? `, hal. ${c.page_number}` : ""})`)
+        );
+        lines.push("");
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[^\w\s-]/g, "").trim() || "percakapan"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const closeViewer = useCallback(() => setViewerDoc(null), []);
 
   // Load chat sessions
   const loadSessions = async () => {
@@ -203,6 +253,8 @@ export const ChatPage: React.FC = () => {
         return "bg-blue-950/60 text-blue-400 border-blue-800/60";
       case "Finance":
         return "bg-amber-950/60 text-amber-400 border-amber-800/60";
+      case "Legal":
+        return "bg-teal-950/60 text-teal-400 border-teal-800/60";
       case "Confidential":
         return "bg-rose-950/60 text-rose-400 border-rose-800/60";
       default:
@@ -292,10 +344,10 @@ export const ChatPage: React.FC = () => {
                 {sessions.map((sess) => {
                   const isActive = sess.id === activeSessionId;
                   return (
+                    <div key={sess.id} className="group flex items-center gap-1">
                     <button
-                      key={sess.id}
                       onClick={() => setActiveSessionId(sess.id)}
-                      className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition ${
+                      className={`flex-1 min-w-0 text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition ${
                         isActive
                           ? "bg-[#252523] text-white font-medium border border-[#353532]"
                           : "text-gray-400 hover:bg-[#1C1C1A] hover:text-gray-200"
@@ -307,6 +359,15 @@ export const ChatPage: React.FC = () => {
                       </div>
                       {isActive && <ChevronRight className="w-3 h-3 shrink-0 text-red-400" />}
                     </button>
+                    <button
+                      onClick={() => handleDeleteSession(sess.id)}
+                      title="Hapus percakapan"
+                      aria-label={`Hapus percakapan ${sess.title}`}
+                      className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-[#1C1C1A] opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -355,6 +416,16 @@ export const ChatPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            {messages.length > 0 && (
+              <button
+                onClick={handleExportSession}
+                title="Ekspor percakapan ke Markdown"
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C1C1A] border border-[#2E2E2B] text-[11px] text-gray-300 hover:text-white hover:border-gray-500 transition"
+              >
+                <Download className="w-3 h-3" />
+                Ekspor
+              </button>
+            )}
             {/* Badge Akses Peran */}
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C1C1A] border border-[#2E2E2B] text-[11px] text-gray-300">
               <Shield className="w-3 h-3 text-emerald-400" />
@@ -457,9 +528,18 @@ export const ChatPage: React.FC = () => {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                           {msg.citations_json.map((cite) => (
-                            <div
+                            <button
+                              type="button"
                               key={cite.index}
-                              className="p-2.5 rounded-lg bg-[#1E1E1C] border border-[#2A2A28] flex flex-col justify-between text-xs"
+                              onClick={() =>
+                                setViewerDoc({
+                                  id: cite.document_id,
+                                  filename: cite.filename,
+                                  classification: cite.classification,
+                                })
+                              }
+                              title="Buka dokumen sumber"
+                              className="text-left p-2.5 rounded-lg bg-[#1E1E1C] border border-[#2A2A28] hover:border-red-500/60 hover:bg-[#232321] flex flex-col justify-between text-xs transition cursor-pointer"
                             >
                               <div>
                                 <div className="flex items-center justify-between gap-1 mb-1">
@@ -481,10 +561,13 @@ export const ChatPage: React.FC = () => {
                                 </p>
                               </div>
 
-                              <div className="mt-2 text-[10px] text-emerald-400 font-medium">
-                                Relevansi {(cite.relevance_score * 100).toFixed(0)}%
+                              <div className="mt-2 flex items-center justify-between text-[10px] font-medium">
+                                <span className="text-emerald-400">
+                                  Relevansi {(cite.relevance_score * 100).toFixed(0)}%
+                                </span>
+                                <span className="text-gray-400">Buka dokumen →</span>
                               </div>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -547,6 +630,7 @@ export const ChatPage: React.FC = () => {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               disabled={isSending}
+              maxLength={20000}
               placeholder="Tanyakan sesuatu tentang dokumen internal..."
               className="w-full pl-4 pr-12 py-3 text-sm bg-[#1C1C1A] border border-[#2E2E2C] rounded-2xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500 transition disabled:opacity-50"
             />
@@ -565,6 +649,16 @@ export const ChatPage: React.FC = () => {
           </p>
         </footer>
       </main>
+
+      {/* Penampil dokumen sumber sitasi */}
+      {viewerDoc && (
+        <DocumentViewerModal
+          doc={viewerDoc}
+          basePath="/chat/documents"
+          badgeClass={getClassificationBadge(viewerDoc.classification)}
+          onClose={closeViewer}
+        />
+      )}
 
       {/* Logout Modal */}
       <LogoutModal

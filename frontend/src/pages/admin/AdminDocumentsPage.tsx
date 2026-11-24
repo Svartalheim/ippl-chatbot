@@ -6,6 +6,8 @@ import {
   Edit2,
   Eye,
   FileText,
+  Lock,
+  Unlock,
   Search,
   Trash2,
   Upload,
@@ -20,8 +22,10 @@ interface DocumentItem {
   filename: string;
   file_type: string;
   file_size_bytes: number;
-  classification: "Public" | "HR" | "Finance" | "Confidential";
+  classification: "Public" | "HR" | "Finance" | "Legal" | "Confidential";
   status: "Terindeks" | "Memproses" | "Gagal";
+  legal_hold?: boolean;
+  sha256?: string | null;
   error_message?: string | null;
   chunk_count: number;
   uploaded_by?: string | null;
@@ -40,6 +44,7 @@ interface DocumentsResponse {
     Public: number;
     HR: number;
     Finance: number;
+    Legal?: number;
     Confidential: number;
   };
 }
@@ -55,7 +60,7 @@ export const AdminDocumentsPage: React.FC = () => {
   const [page, setPage] = useState(1);
 
   // Upload state
-  const [uploadClass, setUploadClass] = useState<"Public" | "HR" | "Finance" | "Confidential">("Public");
+  const [uploadClass, setUploadClass] = useState<"Public" | "HR" | "Finance" | "Legal" | "Confidential">("Public");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -67,7 +72,7 @@ export const AdminDocumentsPage: React.FC = () => {
   // Edit classification modal state
   const [viewingDoc, setViewingDoc] = useState<DocumentItem | null>(null);
   const [editingDoc, setEditingDoc] = useState<DocumentItem | null>(null);
-  const [newClass, setNewClass] = useState<"Public" | "HR" | "Finance" | "Confidential">("Public");
+  const [newClass, setNewClass] = useState<"Public" | "HR" | "Finance" | "Legal" | "Confidential">("Public");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const loadDocuments = async () => {
@@ -143,6 +148,18 @@ export const AdminDocumentsPage: React.FC = () => {
     }
   };
 
+  // Legal hold: dokumen terkunci dari penghapusan (Penasihat Hukum, SKPL 2.3)
+  const handleToggleLegalHold = async (doc: DocumentItem) => {
+    const next = !doc.legal_hold;
+    if (!confirm(`${next ? "Aktifkan" : "Cabut"} legal hold untuk "${doc.filename}"?`)) return;
+    try {
+      await api.patch(`/admin/documents/${doc.id}`, { legal_hold: next });
+      loadDocuments();
+    } catch (err: any) {
+      alert("Gagal mengubah legal hold: " + err.message);
+    }
+  };
+
   const handleSaveClassification = async () => {
     if (!editingDoc) return;
     setIsSavingEdit(true);
@@ -172,6 +189,8 @@ export const AdminDocumentsPage: React.FC = () => {
         return "bg-blue-50 text-blue-700 border-blue-200";
       case "Finance":
         return "bg-amber-50 text-amber-700 border-amber-200";
+      case "Legal":
+        return "bg-teal-50 text-teal-700 border-teal-200";
       case "Confidential":
         return "bg-red-50 text-red-700 border-red-200";
       default:
@@ -228,7 +247,7 @@ export const AdminDocumentsPage: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx,.doc"
+          accept=".pdf,.docx"
           onChange={handleFileUpload}
           disabled={isUploading}
           className="hidden"
@@ -256,6 +275,7 @@ export const AdminDocumentsPage: React.FC = () => {
               <option value="Public">Public</option>
               <option value="HR">HR</option>
               <option value="Finance">Finance</option>
+              <option value="Legal">Legal</option>
               <option value="Confidential">Confidential</option>
             </select>
 
@@ -304,7 +324,7 @@ export const AdminDocumentsPage: React.FC = () => {
 
           {/* Classification Filter Pills */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            {["Semua", "Public", "HR", "Finance", "Confidential"].map((cls) => {
+            {["Semua", "Public", "HR", "Finance", "Legal", "Confidential"].map((cls) => {
               const count = data?.summary?.[cls as keyof typeof data.summary] ?? 0;
               const isSelected = selectedClass === cls;
               return (
@@ -384,6 +404,11 @@ export const AdminDocumentsPage: React.FC = () => {
                         <div>
                           <span className="font-bold text-gray-900 block truncate max-w-xs">
                             {doc.filename}
+                            {doc.legal_hold && (
+                              <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[9px] font-bold align-middle">
+                                <Lock className="w-2.5 h-2.5" /> LEGAL HOLD
+                              </span>
+                            )}
                           </span>
                           <span className="text-[10px] text-gray-400 uppercase">
                             {doc.file_type} · {formatFileSize(doc.file_size_bytes)}
@@ -448,9 +473,17 @@ export const AdminDocumentsPage: React.FC = () => {
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
+                          onClick={() => handleToggleLegalHold(doc)}
+                          title={doc.legal_hold ? "Cabut Legal Hold" : "Aktifkan Legal Hold"}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-teal-700 hover:bg-teal-50 transition"
+                        >
+                          {doc.legal_hold ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
                           onClick={() => handleDelete(doc)}
-                          title="Hapus Dokumen"
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
+                          disabled={doc.legal_hold}
+                          title={doc.legal_hold ? "Dokumen dalam legal hold" : "Hapus Dokumen"}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -517,7 +550,7 @@ export const AdminDocumentsPage: React.FC = () => {
             </p>
 
             <div className="space-y-2 mb-5">
-              {(["Public", "HR", "Finance", "Confidential"] as const).map((c) => (
+              {(["Public", "HR", "Finance", "Legal", "Confidential"] as const).map((c) => (
                 <label
                   key={c}
                   className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer text-xs transition ${

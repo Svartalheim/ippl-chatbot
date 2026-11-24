@@ -1,0 +1,51 @@
+@startuml activity-audit
+' DOC-03 (3) - Activity: Auditor Meninjau Log Audit
+' Sumber: routers/audit.py, services/audit_service.py
+title Activity - Auditor Meninjau Log Audit
+
+|Auditor|
+start
+:Buka menu Tinjau Log Audit;
+|Frontend|
+:GET /audit/logs?page=1;
+|Backend|
+:Validasi JWT + require_roles("Auditor", "Admin");
+|Database|
+:SELECT audit_logs ORDER BY created_at DESC;
+|Frontend|
+:Tampilkan tabel log (paginasi);
+|Auditor|
+repeat
+  :Atur filter (kata kunci, rentang tanggal,\nperan, jenis aksi, status);
+  |Frontend|
+  :GET /audit/logs?search=..&start_date=..;
+  |Database|
+  :Query dengan filter;
+  |Frontend|
+  :Tampilkan hasil;
+  |Auditor|
+repeat while (Ubah filter lagi?) is (ya)
+->tidak;
+if (Verifikasi rantai hash?) then (ya)
+  |Frontend|
+  :GET /audit/verify;
+  |Backend|
+  :verify_audit_chain():\nhitung ulang SHA-256 tiap baris berurutan;
+  if (Rantai utuh?) then (ya)
+    |Frontend|
+    :Tampilkan "Rantai valid";
+  else (tidak)
+    |Frontend|
+    :Tampilkan ID entri pertama yang rusak;
+  endif
+else (tidak)
+endif
+|Auditor|
+if (Ekspor CSV?) then (ya)
+  |Frontend|
+  :GET /audit/export-csv (filter yang sama);
+  :Unduh file CSV;
+else (tidak)
+endif
+stop
+@enduml

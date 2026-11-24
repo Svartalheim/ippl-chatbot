@@ -46,9 +46,16 @@ from ..schemas import (
 from ..services.audit_service import record_audit_log
 from ..services.ingestion_service import (
     STORAGE_DIR,
+    UploadValidationError,
+    compute_sha256,
+    find_duplicate,
     ingest_document,
     reindex_all_documents,
+    sanitize_filename,
+    validate_upload,
 )
+from ..services.document_access import get_viewable_document
+from ..services.security_service import terminate_user_sessions
 
 router = APIRouter(
     prefix="/admin",
@@ -192,6 +199,7 @@ async def get_dashboard_health(session: AsyncSession = Depends(get_session)):
         "Public": class_map.get("Public", 0),
         "HR": class_map.get("HR", 0),
         "Finance": class_map.get("Finance", 0),
+        "Legal": class_map.get("Legal", 0),
         "Confidential": class_map.get("Confidential", 0),
         "total": total_docs,
     }
@@ -217,7 +225,14 @@ async def get_dashboard_health(session: AsyncSession = Depends(get_session)):
     )
     login_failed_count = (await session.execute(stmt_failed)).scalar_one() or 0
 
+    stmt_alert = select(func.count(AuditLog.id)).where(
+        AuditLog.action == "SECURITY_ALERT",
+        AuditLog.created_at >= last_24h,
+    )
+    security_alert_count = (await session.execute(stmt_alert)).scalar_one() or 0
+
     security_events_24h = {
+        "security_alerts": security_alert_count,
         "prompt_injection_blocked": prompt_inj_count,
         "rbac_denied": query_denied_count,
         "keycloak_login_failed": login_failed_count,
@@ -266,6 +281,7 @@ async def list_documents(
         "Public": summary_map.get("Public", 0),
         "HR": summary_map.get("HR", 0),
         "Finance": summary_map.get("Finance", 0),
+        "Legal": summary_map.get("Legal", 0),
         "Confidential": summary_map.get("Confidential", 0),
     }
 
@@ -342,21 +358,30 @@ async def upload_document(
     user_id = uuid.UUID(user.db_id) if user.db_id else None
     client_ip = request.client.host if request.client else None
 
-    # Validasi ekstensi
-    filename = file.filename or "dokumen"
-    ext = Path(filename).suffix.lower().replace(".", "")
-    if ext not in ("pdf", "docx", "doc"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Format file tidak didukung. Harap unggah file PDF atau DOCX.",
-        )
-
-    # Baca file bytes & cek ukuran (maks 20MB)
+    # Validasi: nama file aman, ekstensi, ukuran, tanda tangan file (NFR-SEC-006/013)
+    filename = sanitize_filename(file.filename or "dokumen")
     file_bytes = await file.read()
-    if len(file_bytes) > 20 * 1024 * 1024:
+    try:
+        ext = validate_upload(filename, file_bytes)
+    except UploadValidationError as e:
+        await record_audit_log(
+            session=session,
+            actor_name=user.full_name or user.username,
+            actor_role="Admin",
+            action="DOC_UPLOAD",
+            detail=f"Unggahan '{filename}' ditolak validasi: {e}",
+            status="Gagal",
+            actor_user_id=user_id,
+            ip_address=client_ip,
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Deteksi duplikat berdasarkan SHA-256 isi file
+    duplicate = await find_duplicate(session, compute_sha256(file_bytes))
+    if duplicate is not None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ukuran file melebihi batas maksimal 20 MB.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Dokumen dengan isi yang sama sudah ada: '{duplicate.filename}'.",
         )
 
     # Jalankan ingestion
@@ -402,7 +427,7 @@ async def reindex_all(
         session=session,
         actor_name=user.full_name or user.username,
         actor_role="Admin",
-        action="DOC_UPLOAD",
+        action="DOC_REINDEX",
         detail=f"Indeks ulang seluruh dokumen: {result['reindexed']} berhasil, {result['failed']} gagal",
         status="Berhasil",
         actor_user_id=user_id,
@@ -451,8 +476,23 @@ async def update_document(
             session=session,
             actor_name=user.full_name or user.username,
             actor_role="Admin",
-            action="ROLE_UPDATE",
+            action="DOC_RECLASSIFY",
             detail=f"Klasifikasi dokumen '{doc.filename}' diubah dari [{old_class}] menjadi [{body.classification}]",
+            status="Berhasil",
+            actor_user_id=user_id,
+            ip_address=client_ip,
+        )
+
+    if body.legal_hold is not None and body.legal_hold != doc.legal_hold:
+        doc.legal_hold = body.legal_hold
+        await session.commit()
+        await session.refresh(doc)
+        await record_audit_log(
+            session=session,
+            actor_name=user.full_name or user.username,
+            actor_role="Admin",
+            action="LEGAL_HOLD",
+            detail=f"Legal hold dokumen '{doc.filename}' {'diaktifkan' if doc.legal_hold else 'dicabut'}",
             status="Berhasil",
             actor_user_id=user_id,
             ip_address=client_ip,
@@ -467,55 +507,6 @@ _MEDIA_TYPES = {
 }
 
 
-async def _get_viewable_document(
-    doc_id: uuid.UUID, request: Request, session: AsyncSession, user: UserInfo
-) -> Document:
-    """
-    Ambil dokumen untuk dilihat, dengan menegakkan matriks RBAC: hak 'kelola dokumen'
-    tidak sama dengan hak membaca isi. Peran hanya boleh membuka dokumen yang
-    klasifikasinya ada di allowed_classifications perannya. Setiap akses dicatat (DOC_VIEW).
-    """
-    doc = (await session.execute(select(Document).where(Document.id == doc_id))).scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dokumen tidak ditemukan.")
-
-    role_name = getattr(user, "role_name", "Admin")
-    allowed = await get_user_allowed_classifications(session, role_name)
-    user_id = uuid.UUID(user.db_id) if user.db_id else None
-    client_ip = request.client.host if request.client else None
-
-    if doc.classification not in allowed:
-        await record_audit_log(
-            session=session,
-            actor_name=user.full_name or user.username,
-            actor_role=role_name,
-            action="DOC_VIEW",
-            detail=f"Akses isi dokumen '{doc.filename}' ({doc.classification}) ditolak matriks RBAC",
-            status="Ditolak RBAC",
-            actor_user_id=user_id,
-            ip_address=client_ip,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Dokumen berklasifikasi {doc.classification} berada di luar hak akses baca "
-                f"peran {role_name} ({', '.join(allowed) or 'tidak ada'})."
-            ),
-        )
-
-    await record_audit_log(
-        session=session,
-        actor_name=user.full_name or user.username,
-        actor_role=role_name,
-        action="DOC_VIEW",
-        detail=f"Membuka dokumen '{doc.filename}' ({doc.classification})",
-        status="Berhasil",
-        actor_user_id=user_id,
-        ip_address=client_ip,
-    )
-    return doc
-
-
 @router.get("/documents/{doc_id}/preview", summary="Pratinjau isi dokumen (teks per chunk)")
 async def preview_document(
     doc_id: uuid.UUID,
@@ -527,7 +518,7 @@ async def preview_document(
     Mengembalikan metadata dokumen, apakah file aslinya tersimpan, dan teks hasil ekstraksi
     per chunk. Dipakai untuk dokumen tanpa file asli (seed) dan DOCX (tidak bisa dirender browser).
     """
-    doc = await _get_viewable_document(doc_id, request, session, user)
+    doc = await get_viewable_document(doc_id, request, session, user, default_role="Admin")
     chunks = (
         await session.execute(
             select(DocumentChunk)
@@ -561,7 +552,7 @@ async def get_document_file(
     session: AsyncSession = Depends(get_session),
     user: UserInfo = Depends(current_user),
 ):
-    doc = await _get_viewable_document(doc_id, request, session, user)
+    doc = await get_viewable_document(doc_id, request, session, user, default_role="Admin")
     path = STORAGE_DIR / f"{doc.id}_{doc.filename}"
     if not path.exists():
         raise HTTPException(
@@ -597,6 +588,12 @@ async def delete_document(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Dokumen tidak ditemukan.",
+        )
+
+    if doc.legal_hold:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Dokumen sedang dalam legal hold dan tidak dapat dihapus.",
         )
 
     filename = doc.filename
@@ -870,3 +867,45 @@ async def update_user_role(
     )
 
     return target_user
+
+
+@router.post("/users/{user_id}/terminate-sessions", summary="Akhiri semua sesi pengguna")
+async def terminate_sessions(
+    user_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    admin_user: UserInfo = Depends(current_user),
+):
+    """
+    Mengakhiri semua sesi aktif pengguna: logout di Keycloak dan menolak access token
+    yang diterbitkan sebelumnya (sessions_revoked_at). Dicatat sebagai SESSION_TERMINATE.
+    """
+    admin_id = uuid.UUID(admin_user.db_id) if admin_user.db_id else None
+    client_ip = request.client.host if request.client else None
+
+    target_user = await session.get(User, user_id)
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pengguna tidak ditemukan.")
+    if admin_id is not None and target_user.id == admin_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gunakan Logout untuk mengakhiri sesi Anda sendiri.",
+        )
+
+    keycloak_ok = await terminate_user_sessions(session, target_user)
+    await session.commit()
+
+    await record_audit_log(
+        session=session,
+        actor_name=admin_user.full_name or admin_user.username,
+        actor_role="Admin",
+        action="SESSION_TERMINATE",
+        detail=(
+            f"Semua sesi pengguna '{target_user.username}' diakhiri"
+            + ("" if keycloak_ok else " (Keycloak tidak dapat dihubungi; token lama tetap ditolak backend)")
+        ),
+        status="Berhasil",
+        actor_user_id=admin_id,
+        ip_address=client_ip,
+    )
+    return {"status": "terminated", "user_id": str(user_id), "keycloak_logout": keycloak_ok}

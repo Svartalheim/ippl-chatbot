@@ -1,0 +1,34 @@
+@startuml seq-login
+' DOC-05 (1) - Sequence: Login
+title Sequence - Login Aplikasi
+actor Pengguna
+participant "LoginPage /\nAuthContext" as FE
+participant "AuthRouter\n/auth/login" as AR
+participant "Keycloak" as KC
+participant "auth.py" as AM
+participant "AuditService" as AS
+participant "SecurityService" as SS
+database "PostgreSQL" as DB
+
+Pengguna -> FE : isi username, password
+FE -> AR : POST /auth/login
+AR -> KC : POST /realms/{realm}/protocol/openid-connect/token\n(grant_type=password)
+alt kredensial valid
+  KC --> AR : access_token (JWT), refresh_token
+  AR -> AM : decode_token(access_token)
+  AM --> AR : payload (sub, roles, exp)
+  AR -> AM : sync_user_to_db(session, user_info)
+  AM -> DB : upsert users, last_login_at
+  AR -> AS : record_audit_log(LOGIN, Berhasil)
+  AS -> DB : INSERT audit_logs (prev_hash -> curr_hash)
+  AR --> FE : TokenResponse
+  FE -> FE : simpan token, redirect sesuai peran
+else kredensial salah
+  KC --> AR : 401 invalid_grant
+  AR -> AS : record_audit_log(LOGIN_FAILED, Gagal)
+  AR -> SS : check_security_alert(LOGIN_FAILED)
+  SS -> AS : record_audit_log(SECURITY_ALERT) [jika melewati ambang]
+  AR --> FE : 401
+  FE --> Pengguna : pesan login gagal
+end
+@enduml

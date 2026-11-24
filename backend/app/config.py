@@ -20,6 +20,29 @@ class Settings(BaseSettings):
     keycloak_public_url: str = "http://localhost:8080"   # nilai `iss` di token
     keycloak_realm: str = "dev"
     keycloak_client_id: str = "fastapi-app"
+    # Kredensial admin Keycloak (master realm) untuk mengakhiri sesi pengguna (FR-AUTH-005)
+    keycloak_admin: str = "admin"
+    keycloak_admin_password: str = "admin"
+
+    # Batas input kueri (FR-QUERY-005): kueri lebih panjang dipotong, bukan ditolak
+    max_query_chars: int = 2000
+    # Panjang maksimal teks kueri yang disimpan di log audit (setelah PII disamarkan)
+    audit_query_max_chars: int = 1000
+
+    # Retensi log audit (NFR-SEC-018), dijalankan via: python -m app.audit_retention
+    audit_retention_days: int = 365
+    audit_archive_dir: str = "/code/data/audit_archive"
+
+    # Peringatan keamanan (FR-AUTH-005)
+    security_alert_threshold: int = 5          # jumlah kejadian dalam jendela waktu
+    security_alert_window_minutes: int = 10
+    security_auto_terminate: bool = False      # akhiri sesi otomatis saat peringatan muncul
+
+    # Endpoint debug (/auth/introspect) - matikan di produksi
+    enable_debug_endpoints: bool = True
+
+    # Validasi unggahan (NFR-SEC-006 / NFR-SEC-013)
+    max_upload_mb: int = 20
 
 
 settings = Settings()

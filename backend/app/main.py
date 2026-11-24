@@ -15,6 +15,7 @@ from .seed import seed_database
 from .services.ingestion_service import reembed_when_model_ready
 
 logger = logging.getLogger(__name__)
+STARTUP_LOCK_KEY = 7_771_002
 
 
 @asynccontextmanager
@@ -25,13 +26,20 @@ async def lifespan(app: FastAPI):
     serta menjalankan seeding awal pengguna & dokumen.
     """
     try:
-        logger.info("Menginisialisasi skema database PostgreSQL & pgvector...")
-        await init_db(engine)
-        logger.info("Inisialisasi skema database berhasil.")
+        # Kunci advisory: saat backend berjalan dengan beberapa worker/replika (NFR-SCL-002),
+        # hanya satu proses yang menjalankan migrasi & seeding pada satu waktu.
+        async with engine.connect() as lock_conn:
+            await lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": STARTUP_LOCK_KEY})
+            try:
+                logger.info("Menginisialisasi skema database PostgreSQL & pgvector...")
+                await init_db(engine)
+                logger.info("Inisialisasi skema database berhasil.")
 
-        logger.info("Memeriksa dan menjalankan seeding awal basis data...")
-        async with SessionLocal() as session:
-            await seed_database(session)
+                logger.info("Memeriksa dan menjalankan seeding awal basis data...")
+                async with SessionLocal() as session:
+                    await seed_database(session)
+            finally:
+                await lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": STARTUP_LOCK_KEY})
     except Exception as e:
         logger.error(f"Peringatan saat inisialisasi / seeding database: {e}")
 

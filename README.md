@@ -186,10 +186,13 @@ Didefinisikan di `infra/keycloak/dev-realm.json`, otomatis tersinkron ke databas
 | `andi` | Andi Nugroho | Karyawan | Public | — | `password123` |
 | `rina` | Rina Pratama | HR | Public, HR | — | `password123` |
 | `dimas` | Dimas Fajar | Finance | Public, Finance | — | `password123` |
-| `sari` | Sari Wulandari | Manajemen | Public, HR, Finance, Confidential | — | `password123` |
+| `sari` | Sari Wulandari | Manajemen (CEO) | Public, HR, Finance, Legal, Confidential | — | `password123` |
+| `hana` | Hana Wijaya | Legal | Public, Legal | — | `password123` |
 | `admin_sistem` | Admin Sistem | Admin | Public | Kelola dokumen, peran & izin, dasbor | `password123` |
 | `budi` | Budi Santoso | Auditor | — | Lihat log audit (read-only) | `password123` |
 | `dev` | Dev User | Karyawan | Public | Akun pengembangan | `dev` |
+
+> Akun `hana` dan peran `Legal` hanya diimpor saat realm Keycloak dibuat pertama kali. Pada instalasi lama, jalankan `make reset && make up`, atau tambahkan peran `Legal` dan pengguna `hana` lewat konsol admin Keycloak.
 
 > Admin **mengelola** dokumen tetapi hanya boleh **membaca isi** dokumen `Public` sesuai matriks RBAC. Membuka dokumen di luar hak akses ditolak dan dicatat sebagai `DOC_VIEW` / `Ditolak RBAC`.
 
@@ -246,6 +249,7 @@ Butuh [Langkah 10](#langkah-10-opsional--siapkan-python-untuk-menjalankan-test).
 | `make test-security` | 4b | Kebocoran RBAC, prompt injection, penampil dokumen, **plus** uji DB asli (UPDATE/DELETE/TRUNCATE ditolak, penulisan audit bersamaan, verifikasi rantai) | Ya, untuk uji DB |
 | `make test-db` | 4b | Hanya uji integrasi database | Ya |
 | `make test-perf` | 4c | Uji beban nyata: login → sesi chat → kueri RAG, hitung p95 | Ya |
+| `make test-all` | 4a + 4b + 5 | Semua uji unit & keamanan tanpa Docker, termasuk `test_5_skpl_gaps.py` (PII, validasi unggahan, retensi audit, peringatan keamanan) | Tidak |
 
 Uji beban dapat diatur:
 
@@ -270,6 +274,9 @@ Uji DB menambahkan beberapa baris `pytest-integration` ke `audit_logs`. Ini dise
 | `docker compose restart backend` | **Wajib setelah mengubah kode backend** (lihat troubleshooting) |
 | `docker compose restart frontend` | Muat ulang frontend bila perubahan tidak terlihat |
 | `make reembed` | Embed ulang chunk yang belum memakai model embedding terbaru |
+| `make backup` / `make restore DUMP=...` | Backup / pulihkan database + file dokumen (`./backups`) |
+| `make audit-retention [DRY=1]` | Arsipkan & hapus log audit yang melewati `AUDIT_RETENTION_DAYS` |
+| `make up-prod` | Profil produksi: TLS 1.3 (https://localhost), Postgres SSL, multi-worker, backup otomatis. Lihat `docs/architecture.md` |
 | `make calibrate` | Tampilkan skor relevansi untuk memilih `RAG_SIMILARITY_THRESHOLD` |
 | `make reset` | ⚠️ Hapus **semua** data: database, Keycloak, model Ollama. Setelahnya `make up` lagi |
 

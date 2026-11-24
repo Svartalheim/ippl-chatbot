@@ -1,0 +1,63 @@
+@startuml activity-login-logout
+' DOC-03 (4) - Activity: Login & Logout
+' Sumber: routers/auth.py, auth.py, frontend AuthContext.tsx, LogoutModal.tsx
+title Activity - Login dan Logout
+
+|Pengguna|
+start
+:Buka aplikasi;
+|Frontend|
+:Tampilkan LoginPage;
+|Pengguna|
+:Isi username & password, klik Masuk;
+|Frontend|
+:POST /auth/login;
+|Backend|
+:Teruskan kredensial ke Keycloak;
+|Keycloak|
+:Validasi kredensial;
+if (Valid?) then (tidak)
+  |Backend|
+  :record_audit_log(LOGIN_FAILED, Gagal);
+  :check_security_alert()\n(N kali gagal -> SECURITY_ALERT);
+  :HTTP 401;
+  |Frontend|
+  :Tampilkan pesan "username/password salah";
+  stop
+else (ya)
+  :Terbitkan access token (JWT) + refresh token;
+endif
+|Backend|
+:decode_token (tanda tangan + exp);
+|Database|
+:sync_user_to_db (buat/update users, last_login_at);
+|Backend|
+:record_audit_log(LOGIN, Berhasil);
+|Frontend|
+:Simpan token (AuthContext);
+switch (Peran pengguna)
+case (Admin)
+  :Arahkan ke /admin;
+case (Auditor)
+  :Arahkan ke /auditor;
+case (Lainnya)
+  :Arahkan ke / (chat);
+endswitch
+|Pengguna|
+:Menggunakan sistem;
+note right
+  Access token kedaluwarsa ->
+  POST /auth/refresh otomatis
+end note
+:Klik Logout;
+|Frontend|
+:Tampilkan LogoutModal (konfirmasi);
+:POST /auth/logout (refresh_token);
+|Keycloak|
+:Revoke refresh token / akhiri sesi;
+|Backend|
+:record_audit_log(LOGOUT);
+|Frontend|
+:Hapus token, arahkan ke /login;
+stop
+@enduml

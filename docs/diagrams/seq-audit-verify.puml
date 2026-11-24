@@ -1,0 +1,24 @@
+@startuml seq-audit-verify
+' DOC-05 (4) - Sequence: Verifikasi Rantai Hash Audit
+title Sequence - Verifikasi Rantai Hash Audit
+actor Auditor
+participant "AuditorLogsPage" as FE
+participant "AuditRouter\nverify_chain" as AR
+participant "AuditService" as AS
+database "PostgreSQL" as DB
+
+Auditor -> FE : klik "Verifikasi Rantai"
+FE -> AR : GET /audit/verify
+AR -> AR : require_roles("Auditor", "Admin")
+AR -> AS : verify_audit_chain(session)
+AS -> DB : SELECT * FROM audit_logs ORDER BY id
+loop setiap baris
+  AS -> AS : hitung SHA-256(prev_hash | waktu | aktor | peran | aksi | detail | status)
+  alt hash != curr_hash atau prev_hash != hash sebelumnya
+    AS --> AR : {valid: false, broken_at_id}
+  end
+end
+AS --> AR : {valid: true, total}
+AR --> FE : AuditVerificationResponse
+FE --> Auditor : status keutuhan rantai
+@enduml

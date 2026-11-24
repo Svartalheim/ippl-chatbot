@@ -1,0 +1,48 @@
+@startuml activity-kelola-peran
+' DOC-03 (5) - Activity: Kelola Peran & Izin
+' Sumber: routers/admin.py list_roles, create_role, update_role, update_user_role
+title Activity - Kelola Peran & Izin
+
+|Administrator|
+start
+:Buka menu Kelola Peran & Izin;
+|Frontend|
+:GET /admin/roles dan GET /admin/users;
+|Database|
+:Ambil peran + jumlah pengguna, daftar pengguna;
+|Frontend|
+:Tampilkan matriks peran x klasifikasi;
+|Administrator|
+switch (Pilih aksi)
+case (Tambah peran)
+  :Isi nama, klasifikasi yang diizinkan,\nflag can_manage_docs/rbac/view_audit;
+  |Frontend|
+  :POST /admin/roles;
+case (Ubah izin peran)
+  :Ubah klasifikasi / flag;
+  |Frontend|
+  :PUT /admin/roles/{id};
+case (Ubah peran pengguna)
+  :Pilih pengguna dan peran baru;
+  |Frontend|
+  :PUT /admin/users/{id}/role;
+case (Akhiri sesi pengguna)
+  :Pilih pengguna, konfirmasi;
+  |Frontend|
+  :POST /admin/users/{id}/terminate-sessions;
+  |Keycloak|
+  :Logout semua sesi pengguna;
+endswitch
+|Backend|
+if (Data valid?) then (tidak)
+  :HTTP 400 / 404;
+else (ya)
+  |Database|
+  :Simpan perubahan;
+  |Backend|
+  :record_audit_log(ROLE_UPDATE /\nSESSION_TERMINATE);
+endif
+|Frontend|
+:Muat ulang matriks;
+stop
+@enduml

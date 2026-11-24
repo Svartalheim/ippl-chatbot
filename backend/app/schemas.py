@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 # Klasifikasi & Status Literals
-ClassificationType = Literal["Public", "HR", "Finance", "Confidential"]
+ClassificationType = Literal["Public", "HR", "Finance", "Legal", "Confidential"]
 DocumentStatusType = Literal["Terindeks", "Memproses", "Gagal"]
 MessageSenderType = Literal["user", "assistant"]
 MessageStatusType = Literal["SUCCESS", "QUERY_DENIED", "PROMPT_INJECTION", "ERROR"]
@@ -98,6 +98,8 @@ class DocumentCreate(DocumentBase):
 
 class DocumentResponse(DocumentBase):
     id: UUID
+    sha256: Optional[str] = None
+    legal_hold: bool = False
     status: DocumentStatusType
     error_message: Optional[str] = None
     chunk_count: int
@@ -161,7 +163,8 @@ class ChatMessageBase(BaseModel):
 
 
 class ChatMessageCreate(ChatMessageBase):
-    pass
+    # Batas keras anti-penyalahgunaan; kueri di atas MAX_QUERY_CHARS dipotong oleh rag_service (FR-QUERY-005)
+    content: str = Field(..., min_length=1, max_length=20000)
 
 
 class ChatMessageResponse(BaseModel):
@@ -230,6 +233,7 @@ class AuditVerificationResponse(BaseModel):
     total_entries: int
     checked_at: datetime
     broken_at_id: Optional[int] = None
+    anchor_hash: Optional[str] = None
 
 
 # ==========================================
@@ -248,6 +252,7 @@ class RoleWithUserCountResponse(RoleResponse):
 
 class DocumentUpdate(BaseModel):
     classification: Optional[ClassificationType] = None
+    legal_hold: Optional[bool] = None
 
 
 class UserRoleUpdate(BaseModel):

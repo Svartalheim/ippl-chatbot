@@ -401,6 +401,67 @@ async def process_document_file(
         return document
 
 
+# ============================================================
+# Validasi unggahan (NFR-SEC-006 / NFR-SEC-013)
+# ============================================================
+VALID_CLASSIFICATIONS = ["Public", "HR", "Finance", "Legal", "Confidential"]
+ALLOWED_EXTENSIONS = ("pdf", "docx")
+_SAFE_NAME_RE = re.compile(r"[^\w\s.()\-]", re.UNICODE)
+
+
+class UploadValidationError(ValueError):
+    """Unggahan ditolak oleh validasi; pesan aman ditampilkan ke pengguna."""
+
+
+def sanitize_filename(filename: str) -> str:
+    """Buang komponen path dan karakter berbahaya dari nama file."""
+    name = Path((filename or "dokumen").replace("\\", "/")).name
+    name = _SAFE_NAME_RE.sub("_", name).strip(" .")
+    return (name or "dokumen")[:200]
+
+
+def compute_sha256(file_bytes: bytes) -> str:
+    return hashlib.sha256(file_bytes).hexdigest()
+
+
+def validate_upload(filename: str, file_bytes: bytes) -> str:
+    """
+    Validasi file sebelum diserap: ekstensi yang diizinkan, ukuran, file tidak kosong,
+    dan tanda tangan (magic bytes) sesuai ekstensi. Mengembalikan ekstensi ternormalisasi.
+    """
+    ext = Path(filename or "").suffix.lower().lstrip(".")
+    if ext == "doc":
+        raise UploadValidationError(
+            "Format .doc (Word lama) tidak didukung. Simpan ulang sebagai .docx atau PDF."
+        )
+    if ext not in ALLOWED_EXTENSIONS:
+        raise UploadValidationError("Format file tidak didukung. Harap unggah file PDF atau DOCX.")
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if not file_bytes:
+        raise UploadValidationError("File kosong.")
+    if len(file_bytes) > max_bytes:
+        raise UploadValidationError(f"Ukuran file melebihi batas maksimal {settings.max_upload_mb} MB.")
+
+    if ext == "pdf" and not file_bytes[:1024].lstrip().startswith(b"%PDF-"):
+        raise UploadValidationError("Isi file bukan PDF yang valid (tanda tangan file tidak cocok).")
+    if ext == "docx":
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                if "word/document.xml" not in zf.namelist():
+                    raise UploadValidationError("Isi file bukan dokumen DOCX yang valid.")
+        except zipfile.BadZipFile:
+            raise UploadValidationError("Isi file bukan dokumen DOCX yang valid (bukan arsip OOXML).")
+    return ext
+
+
+async def find_duplicate(session: AsyncSession, sha256: str) -> Optional[Document]:
+    res = await session.execute(select(Document).where(Document.sha256 == sha256).limit(1))
+    return res.scalar_one_or_none()
+
+
 async def ingest_document(
     session: AsyncSession,
     filename: str,
@@ -412,7 +473,7 @@ async def ingest_document(
     """
     Membuat record dokumen baru di basis data lalu menjalankan pipeline ingestion.
     """
-    valid_classifications = ["Public", "HR", "Finance", "Confidential"]
+    valid_classifications = VALID_CLASSIFICATIONS
     if classification not in valid_classifications:
         raise ValueError(
             f"Klasifikasi '{classification}' tidak valid. Pilih dari {valid_classifications}."
@@ -423,6 +484,7 @@ async def ingest_document(
         filename=filename,
         file_type=file_type.lower().replace(".", ""),
         file_size_bytes=len(file_bytes),
+        sha256=compute_sha256(file_bytes),
         classification=classification,
         status="Memproses",
         chunk_count=0,

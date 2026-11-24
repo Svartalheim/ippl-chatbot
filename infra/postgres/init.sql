@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
     role_id INT REFERENCES roles(id) ON DELETE SET NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMPTZ,
+    sessions_revoked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -37,7 +38,9 @@ CREATE TABLE IF NOT EXISTS documents (
     filename VARCHAR(255) NOT NULL,
     file_type VARCHAR(50) NOT NULL,
     file_size_bytes BIGINT NOT NULL,
-    classification VARCHAR(20) NOT NULL CHECK (classification IN ('Public', 'HR', 'Finance', 'Confidential')),
+    sha256 VARCHAR(64),
+    legal_hold BOOLEAN NOT NULL DEFAULT FALSE,
+    classification VARCHAR(20) NOT NULL CHECK (classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential')),
     status VARCHAR(20) NOT NULL DEFAULT 'Memproses' CHECK (status IN ('Terindeks', 'Memproses', 'Gagal')),
     error_message TEXT,
     chunk_count INT NOT NULL DEFAULT 0,
@@ -54,11 +57,13 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     content TEXT NOT NULL,
     page_number INT,
     section_title TEXT,
-    classification VARCHAR(20) NOT NULL CHECK (classification IN ('Public', 'HR', 'Finance', 'Confidential')),
+    classification VARCHAR(20) NOT NULL CHECK (classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential')),
     embedding vector(768),
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS ix_documents_sha256 ON documents (sha256);
 
 -- Indeks untuk document_chunks
 CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding ON document_chunks USING hnsw (embedding vector_cosine_ops);
@@ -120,6 +125,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
 RETURNS TRIGGER AS $$
 BEGIN
+    -- Pengecualian tunggal: job retensi (python -m app.audit_retention) men-set
+    -- app.audit_retention_days per transaksi; hanya baris lebih tua dari periode itu yang boleh dihapus.
+    IF TG_OP = 'DELETE'
+       AND COALESCE(current_setting('app.audit_retention_days', true), '') ~ '^[0-9]+$'
+       AND current_setting('app.audit_retention_days')::int >= 30
+       AND OLD.created_at < NOW() - make_interval(days => current_setting('app.audit_retention_days')::int)
+    THEN
+        RETURN OLD;
+    END IF;
     RAISE EXCEPTION 'Operasi % pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.', TG_OP;
     RETURN NULL;
 END;

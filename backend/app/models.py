@@ -79,6 +79,10 @@ class User(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Token yang diterbitkan sebelum waktu ini ditolak (sesi diakhiri admin / peringatan keamanan)
+    sessions_revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -95,7 +99,7 @@ class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         CheckConstraint(
-            "classification IN ('Public', 'HR', 'Finance', 'Confidential')",
+            "classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential')",
             name="check_document_classification",
         ),
         CheckConstraint(
@@ -110,7 +114,11 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(50), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Checksum isi file untuk integritas & deteksi duplikat (NFR-SEC-006/013)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     classification: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    # Legal hold: dokumen tidak boleh dihapus selama aktif (Penasihat Hukum, SKPL 2.3)
+    legal_hold: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="Memproses")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -138,7 +146,7 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
         CheckConstraint(
-            "classification IN ('Public', 'HR', 'Finance', 'Confidential')",
+            "classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential')",
             name="check_chunk_classification",
         ),
         Index("idx_document_chunks_classification", "classification"),
@@ -332,12 +340,42 @@ async def init_db(engine: AsyncEngine) -> None:
         for stmt in AUDIT_LOG_TRIGGER_STATEMENTS:
             await conn.execute(text(stmt))
 
+        # 5. Migrasi idempoten untuk database yang dibuat sebelum kolom/konstraint baru ada
+        for stmt in SCHEMA_MIGRATION_STATEMENTS:
+            await conn.execute(text(stmt))
+
+
+SCHEMA_MIGRATION_STATEMENTS = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_revoked_at TIMESTAMPTZ",
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS sha256 VARCHAR(64)",
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN NOT NULL DEFAULT FALSE",
+    "CREATE INDEX IF NOT EXISTS ix_documents_sha256 ON documents (sha256)",
+    # Tambah klasifikasi 'Legal' (nama konstraint berbeda antara init.sql dan SQLAlchemy)
+    "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_classification_check",
+    "ALTER TABLE documents DROP CONSTRAINT IF EXISTS check_document_classification",
+    """ALTER TABLE documents ADD CONSTRAINT check_document_classification
+       CHECK (classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential'))""",
+    "ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS document_chunks_classification_check",
+    "ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS check_chunk_classification",
+    """ALTER TABLE document_chunks ADD CONSTRAINT check_chunk_classification
+       CHECK (classification IN ('Public', 'HR', 'Finance', 'Legal', 'Confidential'))""",
+]
+
 
 AUDIT_LOG_TRIGGER_STATEMENTS = [
     """
     CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
     RETURNS TRIGGER AS $$
     BEGIN
+        -- Satu-satunya pengecualian: DELETE oleh job retensi (app.audit_retention_days di-set
+        -- per transaksi) dan hanya untuk baris yang lebih tua dari periode retensi.
+        IF TG_OP = 'DELETE'
+           AND COALESCE(current_setting('app.audit_retention_days', true), '') ~ '^[0-9]+$'
+           AND current_setting('app.audit_retention_days')::int >= 30
+           AND OLD.created_at < NOW() - make_interval(days => current_setting('app.audit_retention_days')::int)
+        THEN
+            RETURN OLD;
+        END IF;
         RAISE EXCEPTION 'Operasi % pada tabel audit_logs tidak diizinkan. Audit log bersifat append-only.', TG_OP;
         RETURN NULL;
     END;

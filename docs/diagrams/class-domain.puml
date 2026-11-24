@@ -1,0 +1,180 @@
+@startuml class-domain
+' ==========================================================================
+' DOC-04 - Class Diagram (tingkat analisis/domain), selaras dengan backend/app/models.py
+' Menggantikan SKPL 3.2.2. Tidak ada pewarisan User -> admin/karyawan/auditor:
+' kemampuan setiap pengguna ditentukan oleh Peran (Role).
+' ==========================================================================
+skinparam classAttributeIconSize 0
+hide empty members
+
+enum Klasifikasi {
+  Public
+  HR
+  Finance
+  Legal
+  Confidential
+}
+
+enum StatusDokumen {
+  Memproses
+  Terindeks
+  Gagal
+}
+
+enum Pengirim {
+  user
+  assistant
+}
+
+enum StatusPesan {
+  SUCCESS
+  QUERY_DENIED
+  PROMPT_INJECTION
+  ERROR
+}
+
+class Peran <<Role>> {
+  - id : Integer
+  - nama : String
+  - deskripsi : String
+  - allowedClassifications : List<Klasifikasi>
+  - canManageDocs : Boolean
+  - canManageRbac : Boolean
+  - canViewAudit : Boolean
+  - createdAt : DateTime
+  + tambahPeran()
+  + ubahIzin()
+}
+
+class User {
+  - id : UUID
+  - keycloakSub : String
+  - username : String
+  - fullName : String
+  - email : String
+  - isActive : Boolean
+  - lastLoginAt : DateTime
+  - createdAt : DateTime
+  + login()
+  + logout()
+  + ubahPeran(peran : Peran)
+  + akhiriSesi()
+}
+
+class Dokumen <<Document>> {
+  - id : UUID
+  - filename : String
+  - fileType : String
+  - fileSizeBytes : Long
+  - sha256 : String
+  - classification : Klasifikasi
+  - legalHold : Boolean
+  - status : StatusDokumen
+  - errorMessage : String
+  - chunkCount : Integer
+  - createdAt : DateTime
+  - updatedAt : DateTime
+  + unggah()
+  + hapus()
+  + ubahKlasifikasi(k : Klasifikasi)
+  + indeksUlang()
+}
+
+class DocumentChunk {
+  - id : UUID
+  - chunkIndex : Integer
+  - content : String
+  - pageNumber : Integer
+  - sectionTitle : String
+  - classification : Klasifikasi
+  - embedding : Vector(768)
+  - metadata : JSON
+  + buatEmbedding()
+}
+
+class ChatSession {
+  - id : UUID
+  - title : String
+  - createdAt : DateTime
+  - updatedAt : DateTime
+  + buatSesi()
+  + ambilRiwayat() : List<ChatMessage>
+  + hapusRiwayat()
+}
+
+class ChatMessage {
+  - id : UUID
+  - sender : Pengirim
+  - content : String
+  - status : StatusPesan
+  - blockedClassification : Klasifikasi
+  - citations : List<Sitasi>
+  - latencyMs : Integer
+  - createdAt : DateTime
+  + ajukanPertanyaan(teks : String)
+  + simpanJawaban()
+}
+
+class Feedback {
+  - id : UUID
+  - isPositive : Boolean
+  - comment : String
+  - createdAt : DateTime
+  + simpanFeedback()
+}
+
+class AuditLog {
+  - id : Long
+  - createdAt : DateTime
+  - actorName : String
+  - actorRole : String
+  - ipAddress : String
+  - action : String
+  - detail : String
+  - status : String
+  - prevHash : String
+  - currHash : String
+  + catatLog()
+  + filterLog()
+  + verifikasiRantai() : Boolean
+  + eksporCSV()
+}
+
+class DasborKesehatan <<boundary>> {
+  - statusLayanan : Map
+  - latensiP95Ms : Integer
+  - jumlahKueri : Integer
+  - jumlahDokumen : Integer
+  - kejadianKeamanan : Integer
+  + ambilMetrik()
+}
+
+User "0..*" --> "0..1" Peran : memiliki >
+User "0..1" -- "0..*" Dokumen : mengunggah >
+Dokumen "1" *-- "0..*" DocumentChunk : terdiri dari >
+User "1" -- "0..*" ChatSession : memiliki >
+ChatSession "1" *-- "0..*" ChatMessage : berisi >
+ChatMessage "1" -- "0..1" Feedback : dinilai >
+User "0..1" -- "0..*" Feedback : memberi >
+User "0..1" -- "0..*" AuditLog : aktor >
+ChatMessage ..> DocumentChunk : sitasi merujuk
+DasborKesehatan ..> ChatMessage : agregasi latensi
+DasborKesehatan ..> AuditLog : agregasi kejadian
+DasborKesehatan ..> Dokumen : jumlah dokumen
+
+Peran ..> Klasifikasi
+DocumentChunk ..> Klasifikasi
+
+note right of AuditLog
+  Append-only: trigger PostgreSQL menolak
+  UPDATE / DELETE / TRUNCATE.
+  currHash = SHA-256(prevHash | waktu | aktor |
+  peran | aksi | detail | status)
+end note
+
+note bottom of DocumentChunk
+  Klasifikasi disalin dari Dokumen saat ingest.
+  Filter RBAC dijalankan di level chunk
+  sebelum konteks dikirim ke LLM.
+end note
+@enduml

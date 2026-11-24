@@ -42,3 +42,9 @@ yarn-error.log
 
 # File dokumen yang diunggah (bisa berklasifikasi rahasia)
 data/documents/
+
+# Backup, arsip audit, dan sertifikat lokal (jangan di-commit)
+backups/
+data/audit_archive/
+infra/certs/*.crt
+infra/certs/*.key

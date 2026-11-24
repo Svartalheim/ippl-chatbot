@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Check,
   Edit2,
+  LogOut,
   Plus,
   RefreshCw,
   Search,
@@ -14,7 +15,7 @@ interface RoleItem {
   id: number;
   name: string;
   description?: string;
-  allowed_classifications: Array<"Public" | "HR" | "Finance" | "Confidential">;
+  allowed_classifications: Array<"Public" | "HR" | "Finance" | "Legal" | "Confidential">;
   can_manage_docs: boolean;
   can_manage_rbac: boolean;
   can_view_audit: boolean;
@@ -48,7 +49,7 @@ export const AdminRolesPage: React.FC = () => {
   // Role edit modal
   const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
   const [roleForm, setRoleForm] = useState<{
-    allowed_classifications: Array<"Public" | "HR" | "Finance" | "Confidential">;
+    allowed_classifications: Array<"Public" | "HR" | "Finance" | "Legal" | "Confidential">;
     can_manage_docs: boolean;
     can_view_audit: boolean;
   }>({
@@ -110,7 +111,7 @@ export const AdminRolesPage: React.FC = () => {
     });
   };
 
-  const handleToggleClassification = (cls: "Public" | "HR" | "Finance" | "Confidential") => {
+  const handleToggleClassification = (cls: "Public" | "HR" | "Finance" | "Legal" | "Confidential") => {
     setRoleForm((prev) => {
       const exists = prev.allowed_classifications.includes(cls);
       return {
@@ -136,6 +137,21 @@ export const AdminRolesPage: React.FC = () => {
     }
   };
 
+  // FR-AUTH-005: akhiri semua sesi aktif pengguna (logout Keycloak + tolak token lama)
+  const handleTerminateSessions = async (u: UserItem) => {
+    if (!confirm(`Akhiri semua sesi aktif ${u.full_name || u.username}? Pengguna harus login ulang.`)) return;
+    try {
+      const res = await api.post<{ keycloak_logout: boolean }>(`/admin/users/${u.id}/terminate-sessions`);
+      alert(
+        res.keycloak_logout
+          ? "Semua sesi pengguna telah diakhiri."
+          : "Sesi diakhiri di aplikasi. Keycloak tidak dapat dihubungi, periksa koneksi Keycloak."
+      );
+    } catch (err: any) {
+      alert("Gagal mengakhiri sesi: " + err.message);
+    }
+  };
+
   const handleChangeUserRole = async (userId: string, newRoleId: number) => {
     try {
       await api.put(`/admin/users/${userId}/role`, { role_id: newRoleId });
@@ -158,6 +174,8 @@ export const AdminRolesPage: React.FC = () => {
         return "bg-rose-50 text-rose-700 border-rose-200";
       case "Auditor":
         return "bg-purple-50 text-purple-700 border-purple-200";
+      case "Legal":
+        return "bg-teal-50 text-teal-700 border-teal-200";
       default:
         return "bg-emerald-50 text-emerald-700 border-emerald-200";
     }
@@ -222,6 +240,7 @@ export const AdminRolesPage: React.FC = () => {
                 <th className="pb-3 text-center">Public</th>
                 <th className="pb-3 text-center">HR</th>
                 <th className="pb-3 text-center">Finance</th>
+                <th className="pb-3 text-center">Legal</th>
                 <th className="pb-3 text-center">Confidential</th>
                 <th className="pb-3 text-center">Kelola Dokumen</th>
                 <th className="pb-3 text-center">Lihat Log Audit</th>
@@ -271,6 +290,15 @@ export const AdminRolesPage: React.FC = () => {
                   <td className="py-3.5 text-center">
                     {r.allowed_classifications.includes("Finance") ? (
                       <Check className="w-4 h-4 text-amber-600 mx-auto" />
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+
+                  {/* Legal */}
+                  <td className="py-3.5 text-center">
+                    {r.allowed_classifications.includes("Legal") ? (
+                      <Check className="w-4 h-4 text-teal-600 mx-auto" />
                     ) : (
                       <span className="text-gray-300">—</span>
                     )}
@@ -431,7 +459,14 @@ export const AdminRolesPage: React.FC = () => {
                         : "Hari ini, 09:01"}
                     </td>
 
-                    <td className="py-3 text-right">
+                    <td className="py-3 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => handleTerminateSessions(u)}
+                        title="Akhiri semua sesi"
+                        className="inline-flex items-center gap-1 mr-3 text-[11px] font-semibold text-gray-400 hover:text-red-600 transition"
+                      >
+                        <LogOut className="w-3 h-3" /> Akhiri Sesi
+                      </button>
                       <button
                         onClick={() =>
                           setChangingUserRole(
@@ -479,7 +514,7 @@ export const AdminRolesPage: React.FC = () => {
                   Akses Dokumen Berdasarkan Klasifikasi
                 </span>
                 <div className="grid grid-cols-2 gap-2">
-                  {(["Public", "HR", "Finance", "Confidential"] as const).map((cls) => {
+                  {(["Public", "HR", "Finance", "Legal", "Confidential"] as const).map((cls) => {
                     const isChecked = roleForm.allowed_classifications.includes(cls);
                     return (
                       <label

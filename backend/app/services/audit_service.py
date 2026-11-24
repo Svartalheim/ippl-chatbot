@@ -106,7 +106,24 @@ async def verify_audit_chain(session: AsyncSession) -> Dict[str, Any]:
             "broken_at_id": None,
         }
 
+    # Setelah purge retensi, baris tertua yang tersisa merujuk hash baris yang sudah diarsipkan.
+    # Rantai tetap diverifikasi dari jangkar itu; jangkar harus tercatat di entri AUDIT_ARCHIVE.
     expected_prev_hash = "GENESIS"
+    anchor_hash: Optional[str] = None
+    first = logs[0]
+    if first.prev_hash != "GENESIS":
+        archive_entries = [
+            e for e in logs if e.action == "AUDIT_ARCHIVE" and e.detail and first.prev_hash in e.detail
+        ]
+        if not archive_entries:
+            return {
+                "verified": False,
+                "total_entries": total_entries,
+                "checked_at": checked_at,
+                "broken_at_id": first.id,
+            }
+        anchor_hash = first.prev_hash
+        expected_prev_hash = first.prev_hash
 
     for entry in logs:
         # Cek kontinuitas rantai prev_hash
@@ -149,4 +166,5 @@ async def verify_audit_chain(session: AsyncSession) -> Dict[str, Any]:
         "total_entries": total_entries,
         "checked_at": checked_at,
         "broken_at_id": None,
+        "anchor_hash": anchor_hash,
     }

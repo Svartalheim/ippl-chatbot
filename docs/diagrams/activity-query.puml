@@ -1,0 +1,84 @@
+@startuml activity-query
+' DOC-03 (1) - Activity: Mengajukan Pertanyaan
+' Sumber: routers/chat.py send_chat_query, services/rag_service.py execute_rag_query
+title Activity - Mengajukan Pertanyaan
+
+|Pengguna|
+start
+:Ketik pertanyaan di kolom chat;
+:Tekan Kirim / Enter;
+|Frontend|
+:POST /chat/sessions/{id}/query\n(Authorization: Bearer JWT);
+|Backend|
+:Validasi JWT (current_user);
+if (Token valid & belum kedaluwarsa?) then (tidak)
+  :HTTP 401;
+  |Frontend|
+  :Coba /auth/refresh,\njika gagal arahkan ke /login;
+  stop
+else (ya)
+endif
+|Backend|
+:Simpan pesan pengguna (ChatMessage sender=user);
+if (Panjang kueri > batas?) then (ya)
+  :Potong kueri ke batas maksimal\n(tandai truncated);
+else (tidak)
+endif
+if (check_prompt_injection(query)?) then (ya)
+  :record_audit_log(PROMPT_INJECTION, Diblokir);
+  :check_security_alert();
+  :Jawaban: permintaan ditolak;
+else (tidak)
+  if (is_small_talk(query)?) then (ya)
+    :Jawaban sapaan (canned);
+  elseif (is_document_list_question(query)?) then (ya)
+    |Database|
+    :Ambil daftar dokumen\nsesuai klasifikasi yang diizinkan;
+    |Backend|
+  else (tidak)
+    |Ollama|
+    :create_embedding(query, kind="query");
+    |Backend|
+    if (Embedding berhasil?) then (tidak)
+      :_error_result\n(pesan aman tanpa detail teknis);
+    else (ya)
+      fork
+        |Database|
+        :Top-K chunk DENGAN filter\nclassification = ANY(allowed);
+      fork again
+        |Database|
+        :Top-1 global TANPA filter\n(hanya skor, tidak dikirim ke LLM);
+      end fork
+      |Backend|
+      if (Hasil global jauh lebih relevan\ndaripada hasil yang diizinkan?) then (ya)
+        :record_audit_log(QUERY_DENIED, Ditolak RBAC);
+        :Jawaban: tidak memiliki akses;
+      elseif (Ada chunk relevan >= threshold?) then (tidak)
+        :_no_answer_result;
+      else (ya)
+        :Bangun prompt terstruktur\n(sistem + konteks bernomor + kueri);
+        |Ollama|
+        :_ollama_chat (Llama 3);
+        |Backend|
+        if (LLM berhasil?) then (tidak)
+          :_error_result;
+        elseif (_is_not_found(answer)?) then (ya)
+          :Jawaban "tidak ditemukan";
+        else (tidak)
+          :_renumber_citations\n(hanya sumber yang dikutip);
+        endif
+      endif
+    endif
+  endif
+  :record_audit_log(QUERY)\nteks kueri (PII disamarkan) + ID chunk;
+endif
+:Simpan jawaban (ChatMessage sender=assistant,\nstatus, citations, latency_ms);
+|Frontend|
+:Tampilkan jawaban + sitasi [1], [2];
+|Pengguna|
+if (Klik sitasi?) then (ya)
+  :Buka DocumentViewerModal\n(GET /chat/documents/{id}/preview);
+else (tidak)
+endif
+stop
+@enduml

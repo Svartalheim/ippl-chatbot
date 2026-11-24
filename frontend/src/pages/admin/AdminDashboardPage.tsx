@@ -43,10 +43,12 @@ interface DashboardData {
     Public: number;
     HR: number;
     Finance: number;
+    Legal?: number;
     Confidential: number;
     total: number;
   };
   security_events_24h: {
+    security_alerts?: number;
     prompt_injection_blocked: number;
     rbac_denied: number;
     keycloak_login_failed: number;
@@ -366,6 +368,11 @@ export const AdminDashboardPage: React.FC = () => {
                 barColor: "bg-amber-500",
               },
               {
+                label: "Legal",
+                count: data.documents_by_classification.Legal ?? 0,
+                barColor: "bg-teal-600",
+              },
+              {
                 label: "Confidential",
                 count: data.documents_by_classification.Confidential,
                 barColor: "bg-red-600",
@@ -399,6 +406,19 @@ export const AdminDashboardPage: React.FC = () => {
             </h3>
 
             <div className="space-y-4">
+              {(data.security_events_24h.security_alerts ?? 0) > 0 && (
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-red-600 text-white">
+                  <ShieldAlert className="w-5 h-5 shrink-0" />
+                  <div>
+                    <span className="text-xs font-bold block">
+                      {data.security_events_24h.security_alerts} peringatan keamanan aktif
+                    </span>
+                    <span className="text-[11px] text-red-100">
+                      Aktor dengan kejadian berisiko berulang. Tinjau log audit (SECURITY_ALERT) dan akhiri sesinya bila perlu.
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-3 p-3 rounded-xl bg-red-50/70 border border-red-100">
                 <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
                 <div>

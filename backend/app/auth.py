@@ -40,7 +40,7 @@ _valid_issuers = list(
     )
 )
 
-KNOWN_ROLES = ["Admin", "Manajemen", "Finance", "HR", "Auditor", "Karyawan"]
+KNOWN_ROLES = ["Admin", "Manajemen", "Legal", "Finance", "HR", "Auditor", "Karyawan"]
 
 
 class UserInfo:
@@ -271,7 +271,8 @@ async def get_user_allowed_classifications(
         "Karyawan": ["Public"],
         "HR": ["Public", "HR"],
         "Finance": ["Public", "Finance"],
-        "Manajemen": ["Public", "HR", "Finance", "Confidential"],
+        "Manajemen": ["Public", "HR", "Finance", "Legal", "Confidential"],
+        "Legal": ["Public", "Legal"],
         "Admin": ["Public"],
         "Auditor": [],
     }
@@ -294,8 +295,33 @@ async def current_user(
 
     payload = decode_token(creds.credentials)
     user = UserInfo(payload)
-    await sync_user_to_db(session, user)
+    db_user = await sync_user_to_db(session, user)
+    ensure_session_active(db_user, payload)
     return user
+
+
+def ensure_session_active(db_user: User, payload: dict) -> None:
+    """
+    Tolak token milik pengguna nonaktif atau token yang diterbitkan sebelum sesi
+    diakhiri administrator / peringatan keamanan (FR-AUTH-005).
+    """
+    if not db_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Akun dinonaktifkan. Hubungi administrator.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    revoked_at = db_user.sessions_revoked_at
+    iat = payload.get("iat")
+    if revoked_at is not None and iat is not None:
+        if revoked_at.tzinfo is None:
+            revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+        if datetime.fromtimestamp(iat, tz=timezone.utc) <= revoked_at:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sesi telah diakhiri. Silakan login kembali.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
 
 async def optional_user(

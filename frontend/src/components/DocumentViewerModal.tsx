@@ -22,15 +22,22 @@ interface Props {
   doc: { id: string; filename: string; classification: string };
   badgeClass: string;
   onClose: () => void;
+  /** Endpoint dasar: "/admin/documents" (konsol Admin) atau "/chat/documents" (sitasi chat). */
+  basePath?: string;
 }
 
 /**
- * Penampil dokumen untuk halaman Admin:
+ * Penampil dokumen untuk halaman Admin dan sitasi di chat:
  * - PDF dengan file asli tersimpan -> dirender di <iframe> (viewer PDF bawaan browser)
  * - DOCX / dokumen seed tanpa file -> teks hasil ekstraksi per chunk
  * Hak baca mengikuti matriks RBAC; backend mengembalikan 403 bila di luar hak akses.
  */
-export const DocumentViewerModal: React.FC<Props> = ({ doc, badgeClass, onClose }) => {
+export const DocumentViewerModal: React.FC<Props> = ({
+  doc,
+  badgeClass,
+  onClose,
+  basePath = "/admin/documents",
+}) => {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [tab, setTab] = useState<"file" | "text">("file");
@@ -44,12 +51,12 @@ export const DocumentViewerModal: React.FC<Props> = ({ doc, badgeClass, onClose 
 
     (async () => {
       try {
-        const data = await api.get<PreviewResponse>(`/admin/documents/${doc.id}/preview`);
+        const data = await api.get<PreviewResponse>(`${basePath}/${doc.id}/preview`);
         if (cancelled) return;
         setPreview(data);
 
         if (data.has_file && data.file_type === "pdf") {
-          const blob = await apiFetchBlob(`/admin/documents/${doc.id}/file`);
+          const blob = await apiFetchBlob(`${basePath}/${doc.id}/file`);
           if (cancelled) return;
           objectUrl = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
           setPdfUrl(objectUrl);
@@ -74,11 +81,11 @@ export const DocumentViewerModal: React.FC<Props> = ({ doc, badgeClass, onClose 
       window.removeEventListener("keydown", onKey);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [doc.id, onClose]);
+  }, [doc.id, onClose, basePath]);
 
   const handleDownload = async () => {
     try {
-      const blob = await apiFetchBlob(`/admin/documents/${doc.id}/file?download=true`);
+      const blob = await apiFetchBlob(`${basePath}/${doc.id}/file?download=true`);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

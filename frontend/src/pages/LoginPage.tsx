@@ -99,7 +99,7 @@ export const LoginPage: React.FC = () => {
                   Akses dibatasi per peran (RBAC)
                 </p>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Empat tingkat klasifikasi dokumen: Public, HR, Finance, Confidential.
+                  Lima tingkat klasifikasi dokumen: Public, HR, Finance, Legal, Confidential.
                 </p>
               </div>
             </div>

@@ -78,6 +78,7 @@ services:
     volumes:
       - ./backend/app:/code/app
       - ./data/documents:/code/data/documents   # file asli dokumen yang diunggah (agar tidak hilang saat container dibuat ulang)
+      - ./data/audit_archive:/code/data/audit_archive   # arsip retensi log audit (make audit-retention)
     depends_on:
       postgres:
         condition: service_healthy

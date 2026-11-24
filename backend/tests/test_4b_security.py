@@ -385,15 +385,15 @@ class TestDocumentViewerRBAC:
     @pytest.mark.asyncio
     async def test_admin_cannot_view_confidential_document(self):
         from fastapi import HTTPException
-        from backend.app.routers.admin import _get_viewable_document
+        from backend.app.services.document_access import get_viewable_document
 
         doc, session, user, request = self._setup("Confidential")
         audit = AsyncMock()
-        with patch("backend.app.routers.admin.get_user_allowed_classifications",
+        with patch("backend.app.services.document_access.get_user_allowed_classifications",
                    new=AsyncMock(return_value=["Public"])), \
-             patch("backend.app.routers.admin.record_audit_log", new=audit):
+             patch("backend.app.services.document_access.record_audit_log", new=audit):
             with pytest.raises(HTTPException) as exc:
-                await _get_viewable_document(doc.id, request, session, user)
+                await get_viewable_document(doc.id, request, session, user)
 
         assert exc.value.status_code == 403
         assert audit.call_args.kwargs["action"] == "DOC_VIEW"
@@ -401,14 +401,14 @@ class TestDocumentViewerRBAC:
 
     @pytest.mark.asyncio
     async def test_admin_can_view_public_document_and_it_is_logged(self):
-        from backend.app.routers.admin import _get_viewable_document
+        from backend.app.services.document_access import get_viewable_document
 
         doc, session, user, request = self._setup("Public")
         audit = AsyncMock()
-        with patch("backend.app.routers.admin.get_user_allowed_classifications",
+        with patch("backend.app.services.document_access.get_user_allowed_classifications",
                    new=AsyncMock(return_value=["Public"])), \
-             patch("backend.app.routers.admin.record_audit_log", new=audit):
-            result = await _get_viewable_document(doc.id, request, session, user)
+             patch("backend.app.services.document_access.record_audit_log", new=audit):
+            result = await get_viewable_document(doc.id, request, session, user)
 
         assert result is doc
         assert audit.call_args.kwargs["action"] == "DOC_VIEW"

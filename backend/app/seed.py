@@ -58,6 +58,29 @@ async def get_embedding(text: str) -> Tuple[List[float], str]:
     return deterministic_mock_embedding(text, dim=768), "mock"
 
 
+async def ensure_legal_role(session: AsyncSession) -> None:
+    """
+    Migrasi data idempoten untuk database lama: tambah peran Legal dan beri
+    Manajemen (CEO) akses klasifikasi Legal (SKPL 2.3).
+    """
+    legal = (await session.execute(select(Role).where(Role.name == "Legal"))).scalar_one_or_none()
+    if legal is None:
+        session.add(
+            Role(
+                name="Legal",
+                description="Penasihat Hukum: kontrak, paten, litigasi; dapat meminta legal hold",
+                allowed_classifications=["Public", "Legal"],
+                can_manage_docs=False,
+                can_manage_rbac=False,
+                can_view_audit=False,
+            )
+        )
+    mgmt = (await session.execute(select(Role).where(Role.name == "Manajemen"))).scalar_one_or_none()
+    if mgmt is not None and "Legal" not in (mgmt.allowed_classifications or []):
+        mgmt.allowed_classifications = list(mgmt.allowed_classifications or []) + ["Legal"]
+    await session.commit()
+
+
 async def seed_database(session: AsyncSession) -> None:
     """
     Menjalankan proses seeding jika database belum ter-seed.
@@ -66,6 +89,7 @@ async def seed_database(session: AsyncSession) -> None:
     stmt_check = select(func.count(Role.id))
     role_count = (await session.execute(stmt_check)).scalar_one()
     if role_count > 0:
+        await ensure_legal_role(session)
         logger.info("Database sudah memiliki data peran, melewati seeding.")
         return
 
@@ -99,8 +123,16 @@ async def seed_database(session: AsyncSession) -> None:
         },
         {
             "name": "Manajemen",
-            "description": "Direksi & kepala divisi",
-            "allowed_classifications": ["Public", "HR", "Finance", "Confidential"],
+            "description": "Direksi & kepala divisi (termasuk CEO): akses baca semua klasifikasi",
+            "allowed_classifications": ["Public", "HR", "Finance", "Legal", "Confidential"],
+            "can_manage_docs": False,
+            "can_manage_rbac": False,
+            "can_view_audit": False,
+        },
+        {
+            "name": "Legal",
+            "description": "Penasihat Hukum: kontrak, paten, litigasi; dapat meminta legal hold",
+            "allowed_classifications": ["Public", "Legal"],
             "can_manage_docs": False,
             "can_manage_rbac": False,
             "can_view_audit": False,

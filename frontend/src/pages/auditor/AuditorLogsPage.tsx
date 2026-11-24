@@ -102,6 +102,8 @@ export const AuditorLogsPage: React.FC = () => {
         return "bg-purple-50 text-purple-700 border-purple-200";
       case "Manajemen":
         return "bg-rose-50 text-rose-700 border-rose-200";
+      case "Legal":
+        return "bg-teal-50 text-teal-700 border-teal-200";
       default:
         return "bg-gray-100 text-gray-700 border-gray-200";
     }
@@ -240,6 +242,7 @@ export const AuditorLogsPage: React.FC = () => {
                 <option value="Auditor">Auditor</option>
                 <option value="Karyawan">Karyawan</option>
                 <option value="Manajemen">Manajemen</option>
+                <option value="Legal">Legal</option>
               </select>
             </div>
 
@@ -263,6 +266,15 @@ export const AuditorLogsPage: React.FC = () => {
                 <option value="ROLE_UPDATE">ROLE_UPDATE</option>
                 <option value="LOGIN">LOGIN</option>
                 <option value="FEEDBACK">FEEDBACK</option>
+                <option value="LOGIN_FAILED">LOGIN_FAILED</option>
+                <option value="LOGOUT">LOGOUT</option>
+                <option value="DOC_DELETE">DOC_DELETE</option>
+                <option value="DOC_REINDEX">DOC_REINDEX</option>
+                <option value="DOC_RECLASSIFY">DOC_RECLASSIFY</option>
+                <option value="LEGAL_HOLD">LEGAL_HOLD</option>
+                <option value="SECURITY_ALERT">SECURITY_ALERT</option>
+                <option value="SESSION_TERMINATE">SESSION_TERMINATE</option>
+                <option value="AUDIT_ARCHIVE">AUDIT_ARCHIVE</option>
               </select>
             </div>
 

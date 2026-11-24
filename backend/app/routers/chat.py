@@ -4,7 +4,7 @@ Router untuk Chat RAG, Sesi Percakapan, Riwayat Pesan, dan Evaluasi Umpan Balik 
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,6 +22,11 @@ from ..schemas import (
     FeedbackResponse,
 )
 from ..services.audit_service import record_audit_log
+from ..services.document_access import (
+    document_file_response,
+    document_preview,
+    get_viewable_document,
+)
 from ..services.rag_service import execute_rag_query
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -68,6 +73,28 @@ async def create_session(
     await session.commit()
     await session.refresh(new_session)
     return new_session
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Hapus sesi percakapan")
+async def delete_session(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: UserInfo = Depends(current_user),
+):
+    """
+    Menghapus sesi percakapan milik pengguna beserta seluruh pesannya (hapusRiwayat).
+    Log audit tidak ikut terhapus.
+    """
+    user_id = uuid.UUID(user.db_id) if user.db_id else None
+    chat_sess = (
+        await session.execute(
+            select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if not chat_sess:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sesi percakapan tidak ditemukan.")
+    await session.delete(chat_sess)
+    await session.commit()
 
 
 @router.get("/sessions/{session_id}/messages", response_model=List[ChatMessageResponse], summary="Ambil riwayat pesan")
@@ -208,8 +235,16 @@ async def submit_feedback(
     user_id = uuid.UUID(user.db_id) if user.db_id else None
     client_ip = request.client.host if request.client else None
 
-    # Cek pesan
-    msg_stmt = select(ChatMessage).where(ChatMessage.id == message_id)
+    # Cek pesan: harus jawaban asisten di sesi milik pengguna ini (cegah IDOR)
+    msg_stmt = (
+        select(ChatMessage)
+        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        .where(
+            ChatMessage.id == message_id,
+            ChatMessage.sender == "assistant",
+            ChatSession.user_id == user_id,
+        )
+    )
     res_msg = await session.execute(msg_stmt)
     msg = res_msg.scalar_one_or_none()
     if not msg:
@@ -254,3 +289,30 @@ async def submit_feedback(
     )
 
     return fb
+
+
+# ========================================================
+# Dokumen sumber sitasi (FR-RESP-004 / NFR-USA-002)
+# ========================================================
+@router.get("/documents/{doc_id}/preview", summary="Pratinjau dokumen sumber sitasi")
+async def preview_cited_document(
+    doc_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    user: UserInfo = Depends(current_user),
+):
+    """Teks dokumen per chunk, hanya jika klasifikasinya diizinkan untuk peran pengguna."""
+    doc = await get_viewable_document(doc_id, request, session, user)
+    return await document_preview(session, doc)
+
+
+@router.get("/documents/{doc_id}/file", summary="Buka file asli dokumen sumber sitasi")
+async def get_cited_document_file(
+    doc_id: uuid.UUID,
+    request: Request,
+    download: bool = Query(False, description="true = unduh sebagai lampiran"),
+    session: AsyncSession = Depends(get_session),
+    user: UserInfo = Depends(current_user),
+):
+    doc = await get_viewable_document(doc_id, request, session, user)
+    return document_file_response(doc, download)
